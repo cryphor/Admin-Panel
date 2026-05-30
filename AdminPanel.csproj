@@ -19,53 +19,10 @@
   </PropertyGroup>
 
   <!-- References -->
-  <ItemGroup>
-    <Reference Include="Puck">
-      <HintPath>$(MSBuildThisFileDirectory)libs\Puck.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="0Harmony">
-      <HintPath>$(MSBuildThisFileDirectory)libs\0Harmony.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="UnityEngine">
-      <HintPath>$(PUCK_MANAGED)\UnityEngine.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="UnityEngine.CoreModule">
-      <HintPath>$(PUCK_MANAGED)\UnityEngine.CoreModule.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="UnityEngine.UIElementsModule">
-      <HintPath>$(PUCK_MANAGED)\UnityEngine.UIElementsModule.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="UnityEngine.InputLegacyModule">
-      <HintPath>$(PUCK_MANAGED)\UnityEngine.InputLegacyModule.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="UnityEngine.IMGUIModule">
-      <HintPath>$(PUCK_MANAGED)\UnityEngine.IMGUIModule.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Unity.InputSystem">
-      <HintPath>$(PUCK_MANAGED)\Unity.InputSystem.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="UnityEngine.TextRenderingModule">
-      <HintPath>$(PUCK_MANAGED)\UnityEngine.TextRenderingModule.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Unity.Netcode.Runtime">
-      <HintPath>$(PUCK_MANAGED)\Unity.Netcode.Runtime.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="mscorlib">
-      <HintPath>$(PUCK_MANAGED)\mscorlib.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Unity.Collections">
-      <HintPath>$(PUCK_MANAGED)\Unity.Collections.dll</HintPath>
+    <ItemGroup>
+    <!-- Reference all game DLLs from libs/, mark them as private (don't copy to output) -->
+    <Reference Include="libs\*.dll"
+               Exclude="libs\System*.dll;libs\mscorlib.dll;libs\netstandard.dll;libs\Microsoft*.dll;libs\Mono*.dll;libs\Newtonsoft*.dll">
       <Private>false</Private>
     </Reference>
   </ItemGroup>
