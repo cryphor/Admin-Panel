@@ -1,0 +1,75 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <OutputType>Library</OutputType>
+    <RootNamespace>AdminPanel</RootNamespace>
+    <AssemblyName>AdminPanel</AssemblyName>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <!-- Game assembly references from our local libs folder -->
+  <ItemGroup>
+    <Reference Include="Puck">
+      <HintPath>..\libs\Puck.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>..\libs\0Harmony.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Unity assembly references from game's Managed folder -->
+  <PropertyGroup>
+    <ManagedDir>C:\Program Files (x86)\Steam\steamapps\common\Puck\Puck_Data\Managed</ManagedDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIElementsModule">
+      <HintPath>$(ManagedDir)\UnityEngine.UIElementsModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.UIModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(ManagedDir)\UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>$(ManagedDir)\Unity.TextMeshPro.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Unity.Netcode.Runtime">
+      <HintPath>$(ManagedDir)\Unity.Netcode.Runtime.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Post-build: copy DLL to game's Plugins folder -->
+  <Target Name="PostBuild" AfterTargets="Build">
+    <MakeDir Directories="C:\Program Files (x86)\Steam\steamapps\common\Puck\Plugins\AdminPanel" />
+    <Copy
+      SourceFiles="$(TargetPath)"
+      DestinationFolder="C:\Program Files (x86)\Steam\steamapps\common\Puck\Plugins\AdminPanel"
+      SkipUnchangedFiles="false" />
+    <Message Text="Copied AdminPanel.dll to Puck/Plugins/AdminPanel/" Importance="high" />
+  </Target>
+
+</Project>

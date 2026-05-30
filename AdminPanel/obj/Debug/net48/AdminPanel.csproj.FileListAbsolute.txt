@@ -1,0 +1,5 @@
+C:\Users\w4ua\Documents\Code\Puck Mods\Admin Panel\AdminPanel\obj\Debug\net48\AdminPanel.csproj.AssemblyReference.cache
+C:\Users\w4ua\Documents\Code\Puck Mods\Admin Panel\AdminPanel\obj\Debug\net48\AdminPanel.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\w4ua\Documents\Code\Puck Mods\Admin Panel\AdminPanel\obj\Debug\net48\AdminPanel.AssemblyInfoInputs.cache
+C:\Users\w4ua\Documents\Code\Puck Mods\Admin Panel\AdminPanel\obj\Debug\net48\AdminPanel.AssemblyInfo.cs
+C:\Users\w4ua\Documents\Code\Puck Mods\Admin Panel\AdminPanel\obj\Debug\net48\AdminPanel.csproj.CoreCompileInputs.cache
