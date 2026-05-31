@@ -2,7 +2,7 @@
 
 A admin panel plugin for **[Puck](https://store.steampowered.com/app/1776180/Puck/)** that gives server admins full in-game control via a draggable, minimisable UIToolkit UI.
 
-Press **N** to toggle the panel.
+Press **X** to toggle the panel.
 
 ---
 
