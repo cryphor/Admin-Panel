@@ -1,6 +1,6 @@
 # Puck Admin Panel
 
-A admin panel plugin for **[Puck](https://store.steampowered.com/app/1776180/Puck/)** that gives server admins full in-game control via a draggable, minimisable UIToolkit UI.
+An admin panel plugin for **[Puck](https://store.steampowered.com/app/1776180/Puck/)** that gives server admins full in-game control via a draggable, minimisable UIToolkit UI.
 
 Press **X** to toggle the panel.
 
@@ -27,10 +27,10 @@ All commands are slash-prefixed. Player names are matched by partial name (case-
 |---------|-------------|---------|
 | `/warmup [seconds]` | Start warmup (default 60s) | `/warmup 120` |
 | `/start` | Start the game (Play phase, 300s clock, 0-0) | `/start` |
-| `/pause` | Pause the game clock | `/pause` |
-| `/resume` | Resume the game clock | `/resume` |
-| `/pauseall` | Pause clock + freeze all players | `/pauseall` |
-| `/resumeall` | Resume clock + unfreeze all players | `/resumeall` |
+| `/pause` | Pause the game clock only | `/pause` |
+| `/resume` | Resume the game clock only | `/resume` |
+| `/pauseall` | Pause clock **and** freeze all players | `/pauseall` |
+| `/resumeall` | Resume clock **and** unfreeze all players | `/resumeall` |
 
 ### Player Actions
 

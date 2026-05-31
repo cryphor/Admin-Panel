@@ -9,7 +9,7 @@ using UnityEngine.InputSystem;
 using UnityEngine.UIElements;
 
 // Puck Admin Panel Mod
-// Draggable, minimisable, searchable. Press N to toggle.
+// Draggable, minimisable, searchable. Press X to toggle.
 
 public class PluginMain : IPuckPlugin
 {
@@ -114,7 +114,7 @@ public static class AdminPanel
     {
         if (panel == null) return;
 
-        if (Keyboard.current != null && Keyboard.current.nKey.wasPressedThisFrame && !IsTyping())
+        if (Keyboard.current != null && Keyboard.current.xKey.wasPressedThisFrame && !IsTyping())
             Toggle();
 
         if (isDragging)
@@ -1267,10 +1267,10 @@ public static class AdminPanel
             if (p.IsLocalPlayer) continue;
             try
             {
-                var body = GetPlayerBody(p);
-                if (body != null)
+                var bodyComp = GetPlayerBodyComponent(p);
+                if (bodyComp != null)
                 {
-                    body.constraints = RigidbodyConstraints.FreezeAll;
+                    bodyComp.Server_Freeze(RigidbodyConstraints.FreezeAll);
                     pausedPlayers.Add(p.OwnerClientId);
                 }
             }
@@ -1287,8 +1287,8 @@ public static class AdminPanel
         {
             try
             {
-                var body = GetPlayerBody(p);
-                if (body != null) body.constraints = RigidbodyConstraints.None;
+                var bodyComp = GetPlayerBodyComponent(p);
+                if (bodyComp != null) bodyComp.Server_Unfreeze();
             }
             catch { }
         }
@@ -1402,13 +1402,15 @@ public static class AdminPanel
 
     // ── FREEZE / UNFREEZE ───────────────────────────────────────
 
-    private static Rigidbody GetPlayerBody(Player player)
+    /// <summary>
+    /// Get the PlayerBody component for a player. Tries the private field first, then GetComponentInChildren.
+    /// Returns the PlayerBody (not the Rigidbody) so we can call Server_Freeze/Server_Unfreeze on it.
+    /// </summary>
+    private static global::PlayerBody GetPlayerBodyComponent(Player player)
     {
-        // PlayerBody is a networked object on the player; find it via the player's networked child objects
-        // The Player has PlayerPosition which references their spawned body
         try
         {
-            // Use reflection to access the private PlayerBody field
+            // The Player class has a private field that holds the PlayerBody
             var playerType = player.GetType();
             var bodyField = playerType.GetField("playerBody", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             if (bodyField == null)
@@ -1416,14 +1418,26 @@ public static class AdminPanel
             if (bodyField != null)
             {
                 var body = bodyField.GetValue(player) as global::PlayerBody;
-                if (body != null) return body.Rigidbody;
+                if (body != null) return body;
             }
 
             // Alternative: find PlayerBody in children
             var bodies = player.GetComponentsInChildren<global::PlayerBody>();
-            if (bodies.Length > 0) return bodies[0].Rigidbody;
+            if (bodies.Length > 0) return bodies[0];
         }
         catch { }
+        return null;
+    }
+
+    /// <summary>Get a player's Rigidbody for physics actions (slap, jump).</summary>
+    private static Rigidbody GetPlayerRigidbody(Player player)
+    {
+        var bodyComp = GetPlayerBodyComponent(player);
+        if (bodyComp != null)
+        {
+            try { return bodyComp.Rigidbody; }
+            catch { }
+        }
         return null;
     }
 
@@ -1436,10 +1450,10 @@ public static class AdminPanel
         }
         Player target = GetTargetOrSelected(args);
         if (target == null) { StatusWarn("Select a player or specify one"); return; }
-        var body = GetPlayerBody(target);
-        if (body != null)
+        var bodyComp = GetPlayerBodyComponent(target);
+        if (bodyComp != null)
         {
-            body.constraints = RigidbodyConstraints.FreezeAll;
+            bodyComp.Server_Freeze(RigidbodyConstraints.FreezeAll);
             ChatAuto(
                 SafeNetString(target.Username) + " frozen", ColToHex(ColCyan));
             StatusOk("Frozen " + SafeNetString(target.Username));
@@ -1459,10 +1473,10 @@ public static class AdminPanel
         }
         Player target = GetTargetOrSelected(args);
         if (target == null) { StatusWarn("Select a player or specify one"); return; }
-        var body = GetPlayerBody(target);
-        if (body != null)
+        var bodyComp = GetPlayerBodyComponent(target);
+        if (bodyComp != null)
         {
-            body.constraints = RigidbodyConstraints.None;
+            bodyComp.Server_Unfreeze();
             ChatAuto(
                 SafeNetString(target.Username) + " unfrozen", ColToHex(ColGreen));
             StatusOk("Unfrozen " + SafeNetString(target.Username));
@@ -1476,7 +1490,7 @@ public static class AdminPanel
     private static void CmdFreezePuck()
     {
         // Find puck in scene
-        var puck = UnityEngine.Object.FindObjectOfType<Puck>();
+        var puck = UnityEngine.Object.FindFirstObjectByType<Puck>();
         if (puck != null)
         {
             puck.Rigidbody.constraints = RigidbodyConstraints.FreezeAll;
@@ -1491,7 +1505,7 @@ public static class AdminPanel
 
     private static void CmdUnfreezePuck()
     {
-        var puck = UnityEngine.Object.FindObjectOfType<Puck>();
+        var puck = UnityEngine.Object.FindFirstObjectByType<Puck>();
         if (puck != null)
         {
             puck.Rigidbody.constraints = RigidbodyConstraints.None;
@@ -1510,17 +1524,17 @@ public static class AdminPanel
         int count = 0;
         foreach (var p in players)
         {
-            var body = GetPlayerBody(p);
-            if (body != null)
+            var bodyComp = GetPlayerBodyComponent(p);
+            if (bodyComp != null)
             {
-                body.constraints = RigidbodyConstraints.FreezeAll;
+                bodyComp.Server_Freeze(RigidbodyConstraints.FreezeAll);
                 count++;
             }
         }
         // Also freeze puck
         try
         {
-            var puck = UnityEngine.Object.FindObjectOfType<Puck>();
+            var puck = UnityEngine.Object.FindFirstObjectByType<Puck>();
             if (puck != null) puck.Rigidbody.constraints = RigidbodyConstraints.FreezeAll;
         }
         catch { }
@@ -1534,17 +1548,17 @@ public static class AdminPanel
         int count = 0;
         foreach (var p in players)
         {
-            var body = GetPlayerBody(p);
-            if (body != null)
+            var bodyComp = GetPlayerBodyComponent(p);
+            if (bodyComp != null)
             {
-                body.constraints = RigidbodyConstraints.None;
+                bodyComp.Server_Unfreeze();
                 count++;
             }
         }
         // Also unfreeze puck
         try
         {
-            var puck = UnityEngine.Object.FindObjectOfType<Puck>();
+            var puck = UnityEngine.Object.FindFirstObjectByType<Puck>();
             if (puck != null) puck.Rigidbody.constraints = RigidbodyConstraints.None;
         }
         catch { }
@@ -1657,22 +1671,22 @@ public static class AdminPanel
     {
         Player target = GetTargetOrSelected(args);
         if (target == null) { StatusWarn("Select a player or specify one"); return; }
-        var body = GetPlayerBody(target);
-        if (body != null)
+        var rb = GetPlayerRigidbody(target);
+        if (rb != null)
         {
             Vector3 force = new Vector3(
                 (float)(_rng.NextDouble() * 2 - 1) * 15f,
                 (float)(_rng.NextDouble()) * 10f + 5f,
                 (float)(_rng.NextDouble() * 2 - 1) * 15f
             );
-            body.AddForce(force, ForceMode.Impulse);
+            rb.AddForce(force, ForceMode.Impulse);
             ChatAuto(
                 "Slapped " + SafeNetString(target.Username) + "!", ColToHex(ColYellow));
             StatusOk("Slapped " + SafeNetString(target.Username));
         }
         else
         {
-            StatusErr("No body found");
+            StatusErr("No body found for " + SafeNetString(target.Username));
         }
     }
 
@@ -1680,15 +1694,15 @@ public static class AdminPanel
     {
         Player target = GetTargetOrSelected(args);
         if (target == null) { StatusWarn("Select a player or specify one"); return; }
-        var body = GetPlayerBody(target);
-        if (body != null)
+        var rb = GetPlayerRigidbody(target);
+        if (rb != null)
         {
-            body.AddForce(Vector3.up * 12f, ForceMode.Impulse);
+            rb.AddForce(Vector3.up * 12f, ForceMode.Impulse);
             StatusOk("Jumped " + SafeNetString(target.Username));
         }
         else
         {
-            StatusErr("No body found");
+            StatusErr("No body found for " + SafeNetString(target.Username));
         }
     }
 
