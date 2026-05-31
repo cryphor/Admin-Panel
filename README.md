@@ -1,6 +1,6 @@
 # Puck Admin Panel
 
-An admin panel plugin for **[Puck](https://store.steampowered.com/app/1776180/Puck/)** that gives server admins full in-game control via a draggable, minimisable UIToolkit UI.
+An admin panel plugin for **[Puck](https://store.steampowered.com/app/2994020/Puck/)** that gives server admins full in-game control via a draggable, minimisable UIToolkit UI.
 
 Press **X** to toggle the panel.
 
