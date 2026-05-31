@@ -1,6 +1,6 @@
 # Puck Admin Panel
 
-An admin panel plugin for **[Puck](https://store.steampowered.com/app/1776180/Puck/)** that gives server admins full in-game control via a draggable, minimisable UIToolkit UI.
+An admin panel plugin for **[Puck](https://store.steampowered.com/app/2994020/Puck/)** that gives server admins full in-game control via a draggable, minimisable UIToolkit UI.
 
 Press **X** to toggle the panel.
 
@@ -93,7 +93,6 @@ Bans are available via the **Players** tab — select a player and click **Ban**
 - **Refresh** — re-scan connected players
 - **Sel** button on each row — select that player for targeted commands
 - **Bottom bar** — enter a Steam ID manually and Kick/Ban by ID
-- ★ next to player name = admin
 
 ### Commands Tab
 - **Command input** — type `/command args` and press Enter
