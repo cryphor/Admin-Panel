@@ -2,13 +2,14 @@ using HarmonyLib;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UIElements;
 
 // Puck Admin Panel Mod
-// Draggable, minimisable, searchable. Press N to toggle.
+// Draggable, minimisable, searchable. Press X to toggle.
 
 public class PluginMain : IPuckPlugin
 {
@@ -58,15 +59,18 @@ public static class AdminPanel
     private static Label statusLabel;
     private static TextField steamIdField;
     private static TextField searchField;
+    private static TextField commandField;
     private static Player selectedPlayer;
     private static bool panelVisible = false;
     private static bool minimized = false;
     private static float refreshTimer;
     private static string searchFilter = "";
+    private static int selectedActionTab = 0; // 0=Players, 1=Commands
 
     private static bool isDragging = false;
     private static Vector2 dragOffset;
     private static bool localPlayerIsAdmin = false;
+    private static readonly HashSet<ulong> pausedPlayers = new HashSet<ulong>();
 
     private static readonly Color ColBg = new Color(0.10f, 0.10f, 0.13f, 0.97f);
     private static readonly Color ColHeader = new Color(0.16f, 0.16f, 0.22f, 1f);
@@ -84,6 +88,12 @@ public static class AdminPanel
     private static readonly Color ColRedTeam = new Color(1.00f, 0.30f, 0.30f, 1f);
     private static readonly Color ColBorder = new Color(0.25f, 0.25f, 0.32f, 1f);
     private static readonly Color ColInputBg = new Color(0.14f, 0.14f, 0.18f, 1f);
+    private static readonly Color ColCyan = new Color(0.18f, 0.70f, 0.80f, 1f);
+    private static readonly Color ColPurple = new Color(0.60f, 0.30f, 0.90f, 1f);
+    private static readonly Color ColYellow = new Color(0.90f, 0.85f, 0.20f, 1f);
+    private static readonly Color ColTabActive = new Color(0.18f, 0.35f, 0.65f, 1f);
+    private static readonly Color ColTabInactive = new Color(0.12f, 0.12f, 0.15f, 1f);
+    private static readonly Color ColCmdBg = new Color(0.08f, 0.08f, 0.10f, 1f);
 
     // ── LIFECYCLE ──────────────────────────────────────────────
 
@@ -104,7 +114,7 @@ public static class AdminPanel
     {
         if (panel == null) return;
 
-        if (Keyboard.current != null && Keyboard.current.nKey.wasPressedThisFrame && !IsTyping())
+        if (Keyboard.current != null && Keyboard.current.xKey.wasPressedThisFrame && !IsTyping())
             Toggle();
 
         if (isDragging)
@@ -275,12 +285,26 @@ public static class AdminPanel
         bodyContainer.style.paddingRight = 8;
         bodyContainer.style.paddingBottom = 8;
 
+        // ── TAB BAR ──
+        var tabBar = new VisualElement();
+        tabBar.style.flexDirection = FlexDirection.Row;
+        tabBar.style.height = 28;
+        tabBar.style.marginTop = 4;
+        tabBar.style.marginBottom = 2;
+
+        var playersTab = MakeTab("PLAYERS", 0, tabBar);
+        var commandsTab = MakeTab("COMMANDS", 1, tabBar);
+        bodyContainer.Add(tabBar);
+
+        // ── PLAYERS TAB CONTENT ──
+        var playersContent = new VisualElement();
+        playersContent.name = "PlayersContent";
+
         // Toolbar
         var toolbar = new VisualElement();
         toolbar.style.flexDirection = FlexDirection.Row;
         toolbar.style.height = 34;
         toolbar.style.alignItems = Align.Center;
-        toolbar.style.marginTop = 4;
         toolbar.style.marginBottom = 4;
 
         // Search field - filters player list by name or Steam ID
@@ -306,7 +330,7 @@ public static class AdminPanel
         toolbar.Add(MakeToolButton("Kick", ColOrange, () => ConfirmAction("kick", DoKick)));
         toolbar.Add(MakeToolButton("Ban", ColRed, () => ConfirmAction("ban", DoBan)));
         toolbar.Add(MakeToolButton("Refresh", ColAccent, () => RefreshPlayerList()));
-        bodyContainer.Add(toolbar);
+        playersContent.Add(toolbar);
 
         // Status
         statusLabel = new Label("No players connected");
@@ -316,7 +340,7 @@ public static class AdminPanel
         statusLabel.style.paddingLeft = 4;
         statusLabel.style.paddingTop = 2;
         statusLabel.style.marginBottom = 2;
-        bodyContainer.Add(statusLabel);
+        playersContent.Add(statusLabel);
 
         // Player list
         var scrollView = new ScrollView(ScrollViewMode.Vertical);
@@ -340,16 +364,17 @@ public static class AdminPanel
         colHeader.style.paddingRight = 4;
         colHeader.style.borderTopLeftRadius = 5;
         colHeader.style.borderTopRightRadius = 5;
-        colHeader.Add(MakeHeaderLabel("PLAYER", 190));
-        colHeader.Add(MakeHeaderLabel("TEAM", 80));
-        colHeader.Add(MakeHeaderLabel("ROLE", 70));
-        colHeader.Add(MakeHeaderLabel("STEAM ID", 160));
-        colHeader.Add(MakeHeaderLabel("", 70));
+        colHeader.Add(MakeHeaderLabel("PLAYER", 160));
+        colHeader.Add(MakeHeaderLabel("TEAM", 60));
+        colHeader.Add(MakeHeaderLabel("ROLE", 55));
+        colHeader.Add(MakeHeaderLabel("STATUS", 48));
+        colHeader.Add(MakeHeaderLabel("STEAM ID", 130));
+        colHeader.Add(MakeHeaderLabel("", 90));
         scrollView.Add(colHeader);
 
         playerListContainer = new VisualElement();
         scrollView.Add(playerListContainer);
-        bodyContainer.Add(scrollView);
+        playersContent.Add(scrollView);
 
         // Bottom bar
         var bottomBar = new VisualElement();
@@ -383,10 +408,265 @@ public static class AdminPanel
         bottomBar.Add(steamIdField);
         bottomBar.Add(MakeToolButton("Kick", ColOrange, () => DoKickBySteamId()));
         bottomBar.Add(MakeToolButton("Ban", ColRed, () => DoBanBySteamId()));
-        bodyContainer.Add(bottomBar);
+        playersContent.Add(bottomBar);
+        bodyContainer.Add(playersContent);
+
+        // ── COMMANDS TAB CONTENT ──
+        var commandsContent = new VisualElement();
+        commandsContent.name = "CommandsContent";
+        commandsContent.style.display = DisplayStyle.None;
+
+        // Command input
+        var cmdInputRow = new VisualElement();
+        cmdInputRow.style.flexDirection = FlexDirection.Row;
+        cmdInputRow.style.height = 30;
+        cmdInputRow.style.alignItems = Align.Center;
+        cmdInputRow.style.marginBottom = 6;
+
+        var cmdPrefix = new Label(">");
+        cmdPrefix.style.color = ColCyan;
+        cmdPrefix.style.fontSize = 12;
+        cmdPrefix.style.width = 14;
+
+        commandField = new TextField();
+        commandField.style.flexGrow = 1;
+        commandField.style.height = 26;
+        commandField.style.backgroundColor = ColCmdBg;
+        commandField.style.color = ColText;
+        commandField.style.fontSize = 11;
+        commandField.style.borderTopLeftRadius = 4;
+        commandField.style.borderTopRightRadius = 4;
+        commandField.style.borderBottomLeftRadius = 4;
+        commandField.style.borderBottomRightRadius = 4;
+        commandField.style.paddingLeft = 6;
+        commandField.style.borderLeftWidth = 0;
+        commandField.style.borderRightWidth = 0;
+        commandField.style.borderTopWidth = 0;
+        commandField.style.borderBottomWidth = 0;
+        commandField.RegisterCallback<KeyDownEvent>(evt =>
+        {
+            if (evt.keyCode == KeyCode.Return || evt.keyCode == KeyCode.KeypadEnter)
+            {
+                ExecuteCommand(commandField.value);
+                commandField.value = "";
+                evt.StopPropagation();
+            }
+        });
+
+        var cmdRunBtn = new Button(() => { ExecuteCommand(commandField.value); commandField.value = ""; });
+        var cmdRunLbl = new Label("Run");
+        cmdRunLbl.style.color = Color.white;
+        cmdRunLbl.style.fontSize = 10;
+        cmdRunLbl.style.flexGrow = 1;
+        cmdRunBtn.Add(cmdRunLbl);
+        cmdRunBtn.style.height = 26;
+        cmdRunBtn.style.minWidth = 40;
+        cmdRunBtn.style.paddingLeft = 8;
+        cmdRunBtn.style.paddingRight = 8;
+        cmdRunBtn.style.marginLeft = 4;
+        cmdRunBtn.style.backgroundColor = ColCyan;
+        cmdRunBtn.style.borderTopLeftRadius = 4;
+        cmdRunBtn.style.borderTopRightRadius = 4;
+        cmdRunBtn.style.borderBottomLeftRadius = 4;
+        cmdRunBtn.style.borderBottomRightRadius = 4;
+        cmdRunBtn.style.justifyContent = Justify.Center;
+        cmdRunBtn.style.alignItems = Align.Center;
+
+        cmdInputRow.Add(cmdPrefix);
+        cmdInputRow.Add(commandField);
+        cmdInputRow.Add(cmdRunBtn);
+        commandsContent.Add(cmdInputRow);
+
+        // Quick-action buttons grid
+        var cmdScroll = new ScrollView(ScrollViewMode.Vertical);
+        cmdScroll.style.minHeight = 220;
+        cmdScroll.style.maxHeight = 560;
+        cmdScroll.style.backgroundColor = new Color(0.07f, 0.07f, 0.09f, 1f);
+        cmdScroll.style.borderTopLeftRadius = 5;
+        cmdScroll.style.borderTopRightRadius = 5;
+        cmdScroll.style.borderBottomLeftRadius = 5;
+        cmdScroll.style.borderBottomRightRadius = 5;
+        cmdScroll.style.paddingTop = 4;
+        cmdScroll.style.paddingBottom = 4;
+        cmdScroll.style.paddingLeft = 4;
+        cmdScroll.style.paddingRight = 4;
+        cmdScroll.horizontalScrollerVisibility = ScrollerVisibility.Hidden;
+
+        var cmdGrid = new VisualElement();
+
+        // Game Flow section
+        cmdGrid.Add(MakeSectionLabel("GAME FLOW"));
+        var flowRow1 = new VisualElement(); flowRow1.style.flexDirection = FlexDirection.Row; flowRow1.style.marginBottom = 3;
+        flowRow1.Add(MakeCmdButton("Warmup", ColBlueTeam, () => ExecuteCommand("/warmup")));
+        flowRow1.Add(MakeCmdButton("Start", ColGreen, () => ExecuteCommand("/start")));
+        flowRow1.Add(MakeCmdButton("Pause", ColOrange, () => ExecuteCommand("/pause")));
+        flowRow1.Add(MakeCmdButton("Resume", ColGreen, () => ExecuteCommand("/resume")));
+        cmdGrid.Add(flowRow1);
+        var flowRow2 = new VisualElement(); flowRow2.style.flexDirection = FlexDirection.Row; flowRow2.style.marginBottom = 3;
+        flowRow2.Add(MakeCmdButton("Pause All", ColRed, () => ExecuteCommand("/pauseall")));
+        flowRow2.Add(MakeCmdButton("Resume All", ColGreen, () => ExecuteCommand("/resumeall")));
+        flowRow2.Add(MakeCmdButton("Freeze All", ColCyan, () => ExecuteCommand("/freezeall")));
+        flowRow2.Add(MakeCmdButton("Unfreeze All", ColGreen, () => ExecuteCommand("/unfreezeall")));
+        cmdGrid.Add(flowRow2);
+
+        // Player Actions section
+        cmdGrid.Add(MakeSectionLabel("PLAYER ACTIONS (uses selected player)"));
+        var actionRow1 = new VisualElement(); actionRow1.style.flexDirection = FlexDirection.Row; actionRow1.style.marginBottom = 3;
+        actionRow1.Add(MakeCmdButton("Freeze", ColCyan, () => ExecuteCommand("/freeze")));
+        actionRow1.Add(MakeCmdButton("Unfreeze", ColGreen, () => ExecuteCommand("/unfreeze")));
+        actionRow1.Add(MakeCmdButton("Slap", ColYellow, () => ExecuteCommand("/slap")));
+        actionRow1.Add(MakeCmdButton("Jump", ColPurple, () => ExecuteCommand("/jump")));
+        cmdGrid.Add(actionRow1);
+        var actionRow2 = new VisualElement(); actionRow2.style.flexDirection = FlexDirection.Row; actionRow2.style.marginBottom = 3;
+        actionRow2.Add(MakeCmdButton("Mute", ColOrange, () => ExecuteCommand("/mute")));
+        actionRow2.Add(MakeCmdButton("Unmute", ColGreen, () => ExecuteCommand("/unmute")));
+        actionRow2.Add(MakeCmdButton("Kick", ColRed, () => ConfirmAction("kick", DoKick)));
+        actionRow2.Add(MakeCmdButton("Ban", ColRed, () => ConfirmAction("ban", DoBan)));
+        cmdGrid.Add(actionRow2);
+
+        // Team Management section
+        cmdGrid.Add(MakeSectionLabel("TEAM MANAGEMENT"));
+        var teamRow1 = new VisualElement(); teamRow1.style.flexDirection = FlexDirection.Row; teamRow1.style.marginBottom = 3;
+        teamRow1.Add(MakeCmdButton("To Blue", ColBlueTeam, () => ExecuteCommand("/changeteam blue")));
+        teamRow1.Add(MakeCmdButton("To Red", ColRedTeam, () => ExecuteCommand("/changeteam red")));
+        teamRow1.Add(MakeCmdButton("To Spec", ColTextDim, () => ExecuteCommand("/changeteam spectator")));
+        teamRow1.Add(MakeCmdButton("Swap Teams", ColPurple, () => ExecuteCommand("/swap")));
+        cmdGrid.Add(teamRow1);
+
+        // Game State section
+        cmdGrid.Add(MakeSectionLabel("GAME STATE"));
+        var stateRow1 = new VisualElement(); stateRow1.style.flexDirection = FlexDirection.Row; stateRow1.style.marginBottom = 3;
+        stateRow1.Add(MakeCmdButton("P1", ColAccent, () => ExecuteCommand("/setstate 1")));
+        stateRow1.Add(MakeCmdButton("P2", ColAccent, () => ExecuteCommand("/setstate 2")));
+        stateRow1.Add(MakeCmdButton("P3", ColAccent, () => ExecuteCommand("/setstate 3")));
+        stateRow1.Add(MakeCmdButton("OT", ColOrange, () => ExecuteCommand("/setstate 4")));
+        cmdGrid.Add(stateRow1);
+        var stateRow2 = new VisualElement(); stateRow2.style.flexDirection = FlexDirection.Row; stateRow2.style.marginBottom = 3;
+        stateRow2.Add(MakeCmdButton("Blue +1", ColBlueTeam, () => ExecuteCommand("/setgoals blue +1")));
+        stateRow2.Add(MakeCmdButton("Blue -1", ColBlueTeam, () => ExecuteCommand("/setgoals blue -1")));
+        stateRow2.Add(MakeCmdButton("Red +1", ColRedTeam, () => ExecuteCommand("/setgoals red +1")));
+        stateRow2.Add(MakeCmdButton("Red -1", ColRedTeam, () => ExecuteCommand("/setgoals red -1")));
+        cmdGrid.Add(stateRow2);
+
+        // Info section
+        cmdGrid.Add(MakeSectionLabel("INFO"));
+        var infoRow1 = new VisualElement(); infoRow1.style.flexDirection = FlexDirection.Row; infoRow1.style.marginBottom = 3;
+        infoRow1.Add(MakeCmdButton("Who Am I", ColAccent, () => ExecuteCommand("/whoami")));
+        infoRow1.Add(MakeCmdButton("Muted List", ColOrange, () => ExecuteCommand("/muted")));
+        infoRow1.Add(MakeCmdButton("Freeze Puck", ColCyan, () => ExecuteCommand("/freeze puck")));
+        infoRow1.Add(MakeCmdButton("Unfreeze Puck", ColGreen, () => ExecuteCommand("/unfreeze puck")));
+        cmdGrid.Add(infoRow1);
+
+        // Help text
+        var helpLabel = new Label(
+            "Commands: /warmup [s] /start /pause /resume /mute <p> [dur] /unmute <p> /muted /whoami [p] " +
+            "/changeteam <p> <team> /swap <p1> <p2> /freeze <p|puck> /unfreeze <p|puck> /freezeall /unfreezeall " +
+            "/pauseall /resumeall /kick <p> /kicksteamid <id> /slap <p> /jump <p> /settime <s> /setgoals <team> <n> /setstate <n>"
+        );
+        helpLabel.style.color = ColTextMuted;
+        helpLabel.style.fontSize = 9;
+        helpLabel.style.whiteSpace = WhiteSpace.Normal;
+        helpLabel.style.marginTop = 6;
+        cmdGrid.Add(helpLabel);
+
+        cmdScroll.Add(cmdGrid);
+        commandsContent.Add(cmdScroll);
+        bodyContainer.Add(commandsContent);
 
         panel.Add(bodyContainer);
         uiRoot.Add(panel);
+    }
+
+    private static Button MakeTab(string label, int tabIndex, VisualElement tabBar)
+    {
+        var btn = new Button(() => SelectTab(tabIndex));
+        var lbl = new Label(label);
+        lbl.style.color = selectedActionTab == tabIndex ? ColText : ColTextDim;
+        lbl.style.fontSize = 10;
+        lbl.style.letterSpacing = 1;
+        lbl.style.flexGrow = 1;
+        btn.Add(lbl);
+        btn.style.height = 24;
+        btn.style.minWidth = 80;
+        btn.style.paddingLeft = 8;
+        btn.style.paddingRight = 8;
+        btn.style.marginRight = 2;
+        btn.style.backgroundColor = selectedActionTab == tabIndex ? ColTabActive : ColTabInactive;
+        btn.style.borderTopLeftRadius = 4;
+        btn.style.borderTopRightRadius = 4;
+        btn.style.borderBottomLeftRadius = 0;
+        btn.style.borderBottomRightRadius = 0;
+        btn.style.borderLeftWidth = 0;
+        btn.style.borderRightWidth = 0;
+        btn.style.borderTopWidth = 0;
+        btn.style.borderBottomWidth = 0;
+        btn.style.justifyContent = Justify.Center;
+        btn.style.alignItems = Align.Center;
+        btn.name = "Tab_" + tabIndex;
+        tabBar.Add(btn);
+        return btn;
+    }
+
+    private static void SelectTab(int index)
+    {
+        selectedActionTab = index;
+        var playersContent = bodyContainer.Q<VisualElement>("PlayersContent");
+        var commandsContent = bodyContainer.Q<VisualElement>("CommandsContent");
+        if (playersContent != null) playersContent.style.display = index == 0 ? DisplayStyle.Flex : DisplayStyle.None;
+        if (commandsContent != null) commandsContent.style.display = index == 1 ? DisplayStyle.Flex : DisplayStyle.None;
+
+        // Update tab button styles
+        for (int i = 0; i < 2; i++)
+        {
+            var tabBtn = bodyContainer.Q<Button>("Tab_" + i);
+            if (tabBtn != null)
+            {
+                tabBtn.style.backgroundColor = i == index ? ColTabActive : ColTabInactive;
+                var tabLbl = tabBtn.Q<Label>();
+                if (tabLbl != null) tabLbl.style.color = i == index ? ColText : ColTextDim;
+            }
+        }
+    }
+
+    private static Label MakeSectionLabel(string text)
+    {
+        var l = new Label(text);
+        l.style.color = ColTextMuted;
+        l.style.fontSize = 9;
+        l.style.letterSpacing = 1;
+        l.style.marginTop = 6;
+        l.style.marginBottom = 3;
+        l.style.paddingLeft = 2;
+        return l;
+    }
+
+    private static Button MakeCmdButton(string text, Color bg, Action action)
+    {
+        var lbl = new Label(text);
+        lbl.style.color = Color.white;
+        lbl.style.fontSize = 10;
+        lbl.style.flexGrow = 1;
+
+        var btn = new Button(action);
+        btn.Add(lbl);
+        btn.style.height = 24;
+        btn.style.flexGrow = 1;
+        btn.style.paddingLeft = 4;
+        btn.style.paddingRight = 4;
+        btn.style.marginLeft = 1;
+        btn.style.marginRight = 1;
+        btn.style.backgroundColor = bg;
+        btn.style.borderTopLeftRadius = 3;
+        btn.style.borderTopRightRadius = 3;
+        btn.style.borderBottomLeftRadius = 3;
+        btn.style.borderBottomRightRadius = 3;
+        btn.style.borderLeftWidth = 0;
+        btn.style.borderRightWidth = 0;
+        btn.style.borderTopWidth = 0;
+        btn.style.borderBottomWidth = 0;
+        btn.style.justifyContent = Justify.Center;
+        btn.style.alignItems = Align.Center;
+        return btn;
     }
 
     // ── SEARCH ─────────────────────────────────────────────────
@@ -570,15 +850,17 @@ public static class AdminPanel
         string playerName = SafeNetString(player.Username);
         string steamIdStr = SafeNetString(player.SteamId);
         var gs = player.GameState.Value;
+        bool isMuted = player.IsMuted.Value;
+        bool isAdmin = player.AdminLevel.Value > 0;
 
-        var nameLabel = new Label(playerName);
-        nameLabel.style.width = 190;
+        var nameLabel = new Label((isAdmin ? "★ " : "") + playerName);
+        nameLabel.style.width = 160;
         nameLabel.style.fontSize = 11;
-        nameLabel.style.color = ColText;
+        nameLabel.style.color = isAdmin ? ColYellow : ColText;
         nameLabel.style.overflow = Overflow.Hidden;
 
         var teamLabel = new Label(gs.Team.ToString());
-        teamLabel.style.width = 80;
+        teamLabel.style.width = 60;
         teamLabel.style.fontSize = 10;
         switch (gs.Team)
         {
@@ -588,12 +870,21 @@ public static class AdminPanel
         }
 
         var roleLabel = new Label(gs.Role.ToString());
-        roleLabel.style.width = 70;
+        roleLabel.style.width = 55;
         roleLabel.style.fontSize = 10;
         roleLabel.style.color = ColTextDim;
 
+        // Status indicators: Muted, Frozen
+        string status = "";
+        Color statusCol = ColTextDim;
+        if (isMuted) { status = "MUTED"; statusCol = ColOrange; }
+        var statusLabel = new Label(status);
+        statusLabel.style.width = 48;
+        statusLabel.style.fontSize = 9;
+        statusLabel.style.color = statusCol;
+
         var steamIdLabel = new Label(steamIdStr);
-        steamIdLabel.style.width = 160;
+        steamIdLabel.style.width = 130;
         steamIdLabel.style.fontSize = 9;
         steamIdLabel.style.color = ColTextMuted;
 
@@ -622,6 +913,7 @@ public static class AdminPanel
         row.Add(nameLabel);
         row.Add(teamLabel);
         row.Add(roleLabel);
+        row.Add(statusLabel);
         row.Add(steamIdLabel);
         row.Add(selectBtn);
 
@@ -826,7 +1118,483 @@ public static class AdminPanel
         statusLabel.style.color = ColOrange;
     }
 
-    // ── ACTIONS ────────────────────────────────────────────────
+    // ── CHAT HELPERS ────────────────────────────────────────────
+
+    /// <summary>Send an admin chat message to all players (Color overload).</summary>
+    private static void ChatAuto(string message, Color color)
+    {
+        ChatAuto(message, ColToHex(color));
+    }
+
+    /// <summary>Send an admin chat message to all players (hex string overload).</summary>
+    private static void ChatAuto(string message, string hexColor)
+    {
+        var players = PlayerManager.Instance.GetPlayers();
+        ulong[] allIds = new ulong[players.Count];
+        for (int i = 0; i < players.Count; i++)
+            allIds[i] = players[i].OwnerClientId;
+        ChatManager.Instance.Server_SendChatMessage(message, hexColor, allIds);
+    }
+
+    // ── PLAYER LOOKUP ───────────────────────────────────────────
+
+    private static Player FindPlayerByNeedle(string needle)
+    {
+        if (string.IsNullOrEmpty(needle)) return null;
+        var players = PlayerManager.Instance.GetPlayers();
+        needle = needle.ToLowerInvariant();
+        // Exact Steam ID match
+        foreach (var p in players)
+            if (SafeNetString(p.SteamId).ToLowerInvariant() == needle) return p;
+        // Exact name match
+        foreach (var p in players)
+            if (SafeNetString(p.Username).ToLowerInvariant() == needle) return p;
+        // Partial name match
+        foreach (var p in players)
+            if (SafeNetString(p.Username).ToLowerInvariant().Contains(needle)) return p;
+        // Partial Steam ID match
+        foreach (var p in players)
+            if (SafeNetString(p.SteamId).ToLowerInvariant().Contains(needle)) return p;
+        return null;
+    }
+
+    private static Player FindPlayerBySteamId(string steamId)
+    {
+        return FindPlayerByNeedle(steamId);
+    }
+
+    // ── COMMAND EXECUTOR ────────────────────────────────────────
+
+    private static void ExecuteCommand(string rawInput)
+    {
+        if (string.IsNullOrWhiteSpace(rawInput)) return;
+        string input = rawInput.Trim();
+        if (!input.StartsWith("/")) input = "/" + input;
+
+        string[] parts = input.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return;
+        string cmd = parts[0].ToLowerInvariant();
+        string[] args = parts.Skip(1).ToArray();
+
+        try
+        {
+            switch (cmd)
+            {
+                case "/warmup": CmdWarmup(args); break;
+                case "/start": CmdStart(args); break;
+                case "/pause": CmdPause(args); break;
+                case "/resume": CmdResume(args); break;
+                case "/mute": CmdMute(args); break;
+                case "/unmute": CmdUnmute(args); break;
+                case "/muted": CmdMuted(args); break;
+                case "/whoami": CmdWhoAmI(args); break;
+                case "/changeteam": CmdChangeTeam(args); break;
+                case "/swap": CmdSwap(args); break;
+                case "/freeze": CmdFreeze(args); break;
+                case "/unfreeze": CmdUnfreeze(args); break;
+                case "/freezeall": CmdFreezeAll(args); break;
+                case "/unfreezeall": CmdUnfreezeAll(args); break;
+                case "/pauseall": CmdPauseAll(args); break;
+                case "/resumeall": CmdResumeAll(args); break;
+                case "/kick": CmdKick(args); break;
+                case "/kicksteamid": CmdKickSteamId(args); break;
+                case "/slap": CmdSlap(args); break;
+                case "/jump": CmdJump(args); break;
+                case "/settime": CmdSetTime(args); break;
+                case "/setgoals": CmdSetGoals(args); break;
+                case "/setstate": CmdSetState(args); break;
+                default:
+                    StatusErr("Unknown: " + cmd);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusErr("Cmd error: " + ex.Message);
+        }
+    }
+
+    // ── GAME FLOW ───────────────────────────────────────────────
+
+    private static void CmdWarmup(string[] args)
+    {
+        float seconds = 60f;
+        if (args.Length > 0 && !float.TryParse(args[0], out seconds)) seconds = 60f;
+        var gm = GameManager.Instance;
+        ChatAuto($"Warmup started ({seconds}s)", ColYellow);
+        gm.Server_SetGameState(phase: GamePhase.Warmup, tick: (int)seconds, period: gm.GameState.Value.Period,
+            blueScore: gm.GameState.Value.BlueScore, redScore: gm.GameState.Value.RedScore, isOvertime: gm.GameState.Value.IsOvertime);
+        gm.Server_StartTicking();
+        StatusOk($"Warmup: {seconds}s");
+    }
+
+    private static void CmdStart(string[] args)
+    {
+        ChatAuto("Game started!", ColGreen);
+        GameManager.Instance.Server_SetGameState(phase: GamePhase.Play, tick: 300, period: GameManager.Instance.GameState.Value.Period,
+            blueScore: 0, redScore: 0, isOvertime: false);
+        GameManager.Instance.Server_StartTicking();
+        StatusOk("Game started");
+    }
+
+    private static void CmdPause(string[] args)
+    {
+        var gm = GameManager.Instance;
+        var gs = gm.GameState.Value;
+        gm.Server_SetGameState(phase: GamePhase.Warmup, tick: gs.Tick, period: gs.Period,
+            blueScore: gs.BlueScore, redScore: gs.RedScore, isOvertime: false);
+        gm.Server_StopTicking();
+        ChatAuto("Game paused", ColOrange);
+        StatusOk("Paused");
+    }
+
+    private static void CmdResume(string[] args)
+    {
+        var gm = GameManager.Instance;
+        var gs = gm.GameState.Value;
+        gm.Server_SetGameState(phase: GamePhase.Play, tick: gs.Tick, period: gs.Period,
+            blueScore: gs.BlueScore, redScore: gs.RedScore, isOvertime: gs.IsOvertime);
+        gm.Server_StartTicking();
+        ChatAuto("Game resumed", ColGreen);
+        StatusOk("Resumed");
+    }
+
+    private static void CmdPauseAll(string[] args)
+    {
+        var players = PlayerManager.Instance.GetPlayers();
+        foreach (var p in players)
+        {
+            if (p.IsLocalPlayer) continue;
+            try
+            {
+                var bodyComp = GetPlayerBodyComponent(p);
+                if (bodyComp != null)
+                {
+                    bodyComp.Server_Freeze(RigidbodyConstraints.FreezeAll);
+                    pausedPlayers.Add(p.OwnerClientId);
+                }
+            }
+            catch { }
+        }
+        CmdPause(args);
+        StatusOk("Paused & froze all");
+    }
+
+    private static void CmdResumeAll(string[] args)
+    {
+        var players = PlayerManager.Instance.GetPlayers();
+        foreach (var p in players)
+        {
+            try
+            {
+                var bodyComp = GetPlayerBodyComponent(p);
+                if (bodyComp != null) bodyComp.Server_Unfreeze();
+            }
+            catch { }
+        }
+        pausedPlayers.Clear();
+        CmdResume(args);
+        StatusOk("Resumed & unfroze all");
+    }
+
+    // ── MUTE SYSTEM ─────────────────────────────────────────────
+
+    private static void CmdMute(string[] args)
+    {
+        if (args.Length < 1) { StatusWarn("Usage: /mute <player> [duration]"); return; }
+        string needle = args[0];
+        string duration = args.Length > 1 ? args[1] : "permanent";
+        var player = FindPlayerByNeedle(needle);
+        if (player == null) { StatusErr("Player not found: " + needle); return; }
+        player.IsMuted.Value = true;
+        ChatAuto(
+            SafeNetString(player.Username) + " muted (" + duration + ")", ColToHex(ColOrange));
+        StatusOk("Muted " + SafeNetString(player.Username));
+    }
+
+    private static void CmdUnmute(string[] args)
+    {
+        if (args.Length < 1) { StatusWarn("Usage: /unmute <player>"); return; }
+        var player = FindPlayerByNeedle(args[0]);
+        if (player == null) { StatusErr("Player not found: " + args[0]); return; }
+        player.IsMuted.Value = false;
+        ChatAuto(
+            SafeNetString(player.Username) + " unmuted", ColToHex(ColGreen));
+        StatusOk("Unmuted " + SafeNetString(player.Username));
+    }
+
+    private static void CmdMuted(string[] args)
+    {
+        var players = PlayerManager.Instance.GetPlayers();
+        var muted = players.Where(p => p.IsMuted.Value).ToList();
+        if (muted.Count == 0) { StatusOk("No muted players"); return; }
+        string list = string.Join(", ", muted.Select(p => SafeNetString(p.Username)));
+        StatusOk("Muted: " + list);
+        ChatAuto(
+            "Muted players: " + list, ColToHex(ColOrange));
+    }
+
+    // ── WHOAMI ──────────────────────────────────────────────────
+
+    private static void CmdWhoAmI(string[] args)
+    {
+        Player target = null;
+        if (args.Length > 0)
+        {
+            target = FindPlayerByNeedle(args[0]);
+        }
+        else if (selectedPlayer != null)
+        {
+            target = selectedPlayer;
+        }
+        else
+        {
+            // Use local player
+            var local = PlayerManager.Instance.GetPlayers().FirstOrDefault(p => p.IsLocalPlayer);
+            target = local;
+        }
+        if (target == null) { StatusErr("No player found"); return; }
+        var gs = target.GameState.Value;
+        string info = $"User: {SafeNetString(target.Username)} | Steam: {SafeNetString(target.SteamId)} | Team: {gs.Team} | Role: {gs.Role} | AdminLvl: {target.AdminLevel.Value} | Muted: {target.IsMuted.Value}";
+        StatusOk(info);
+        ChatAuto(info, ColToHex(ColCyan));
+    }
+
+    // ── TEAM MANAGEMENT ─────────────────────────────────────────
+
+    private static void CmdChangeTeam(string[] args)
+    {
+        if (args.Length < 2) { StatusWarn("Usage: /changeteam <player> <blue|red|spectator>"); return; }
+        var player = FindPlayerByNeedle(args[0]);
+        if (player == null) { StatusErr("Player not found: " + args[0]); return; }
+        PlayerTeam team = ParseTeam(args[1]);
+        if (team == PlayerTeam.None) { StatusErr("Invalid team: " + args[1]); return; }
+        player.Server_SetGameState(phase: null, team: team, role: null);
+        ChatAuto(
+            SafeNetString(player.Username) + " → " + team, ColToHex(ColAccent));
+        StatusOk("Team changed");
+    }
+
+    private static void CmdSwap(string[] args)
+    {
+        if (args.Length < 2) { StatusWarn("Usage: /swap <player1> <player2>"); return; }
+        var p1 = FindPlayerByNeedle(args[0]);
+        var p2 = FindPlayerByNeedle(args[1]);
+        if (p1 == null) { StatusErr("Player not found: " + args[0]); return; }
+        if (p2 == null) { StatusErr("Player not found: " + args[1]); return; }
+        PlayerTeam t1 = p1.GameState.Value.Team;
+        PlayerTeam t2 = p2.GameState.Value.Team;
+        p1.Server_SetGameState(phase: null, team: t2, role: null);
+        p2.Server_SetGameState(phase: null, team: t1, role: null);
+        ChatAuto(
+            $"Swapped {SafeNetString(p1.Username)} ↔ {SafeNetString(p2.Username)}", ColToHex(ColPurple));
+        StatusOk("Teams swapped");
+    }
+
+    private static PlayerTeam ParseTeam(string s)
+    {
+        s = s.ToLowerInvariant();
+        if (s == "blue" || s == "b") return PlayerTeam.Blue;
+        if (s == "red" || s == "r") return PlayerTeam.Red;
+        if (s == "spectator" || s == "spec" || s == "s") return PlayerTeam.Spectator;
+        return PlayerTeam.None;
+    }
+
+    // ── FREEZE / UNFREEZE ───────────────────────────────────────
+
+    /// <summary>
+    /// Get the PlayerBody component for a player. Tries the private field first, then GetComponentInChildren.
+    /// Returns the PlayerBody (not the Rigidbody) so we can call Server_Freeze/Server_Unfreeze on it.
+    /// </summary>
+    private static global::PlayerBody GetPlayerBodyComponent(Player player)
+    {
+        try
+        {
+            // The Player class has a private field that holds the PlayerBody
+            var playerType = player.GetType();
+            var bodyField = playerType.GetField("playerBody", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (bodyField == null)
+                bodyField = playerType.GetField("PlayerBody", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            if (bodyField != null)
+            {
+                var body = bodyField.GetValue(player) as global::PlayerBody;
+                if (body != null) return body;
+            }
+
+            // Alternative: find PlayerBody in children
+            var bodies = player.GetComponentsInChildren<global::PlayerBody>();
+            if (bodies.Length > 0) return bodies[0];
+        }
+        catch { }
+        return null;
+    }
+
+    /// <summary>Get a player's Rigidbody for physics actions (slap, jump).</summary>
+    private static Rigidbody GetPlayerRigidbody(Player player)
+    {
+        var bodyComp = GetPlayerBodyComponent(player);
+        if (bodyComp != null)
+        {
+            try { return bodyComp.Rigidbody; }
+            catch { }
+        }
+        return null;
+    }
+
+    private static void CmdFreeze(string[] args)
+    {
+        if (args.Length > 0 && args[0].ToLowerInvariant() == "puck")
+        {
+            CmdFreezePuck();
+            return;
+        }
+        Player target = GetTargetOrSelected(args);
+        if (target == null) { StatusWarn("Select a player or specify one"); return; }
+        var bodyComp = GetPlayerBodyComponent(target);
+        if (bodyComp != null)
+        {
+            bodyComp.Server_Freeze(RigidbodyConstraints.FreezeAll);
+            ChatAuto(
+                SafeNetString(target.Username) + " frozen", ColToHex(ColCyan));
+            StatusOk("Frozen " + SafeNetString(target.Username));
+        }
+        else
+        {
+            StatusErr("No body found for " + SafeNetString(target.Username));
+        }
+    }
+
+    private static void CmdUnfreeze(string[] args)
+    {
+        if (args.Length > 0 && args[0].ToLowerInvariant() == "puck")
+        {
+            CmdUnfreezePuck();
+            return;
+        }
+        Player target = GetTargetOrSelected(args);
+        if (target == null) { StatusWarn("Select a player or specify one"); return; }
+        var bodyComp = GetPlayerBodyComponent(target);
+        if (bodyComp != null)
+        {
+            bodyComp.Server_Unfreeze();
+            ChatAuto(
+                SafeNetString(target.Username) + " unfrozen", ColToHex(ColGreen));
+            StatusOk("Unfrozen " + SafeNetString(target.Username));
+        }
+        else
+        {
+            StatusErr("No body found for " + SafeNetString(target.Username));
+        }
+    }
+
+    private static void CmdFreezePuck()
+    {
+        // Find puck in scene
+        var puck = UnityEngine.Object.FindFirstObjectByType<Puck>();
+        if (puck != null)
+        {
+            puck.Rigidbody.constraints = RigidbodyConstraints.FreezeAll;
+            ChatAuto("Puck frozen", ColToHex(ColCyan));
+            StatusOk("Puck frozen");
+        }
+        else
+        {
+            StatusErr("Puck not found in scene");
+        }
+    }
+
+    private static void CmdUnfreezePuck()
+    {
+        var puck = UnityEngine.Object.FindFirstObjectByType<Puck>();
+        if (puck != null)
+        {
+            puck.Rigidbody.constraints = RigidbodyConstraints.None;
+            ChatAuto("Puck unfrozen", ColToHex(ColGreen));
+            StatusOk("Puck unfrozen");
+        }
+        else
+        {
+            StatusErr("Puck not found in scene");
+        }
+    }
+
+    private static void CmdFreezeAll(string[] args)
+    {
+        var players = PlayerManager.Instance.GetPlayers();
+        int count = 0;
+        foreach (var p in players)
+        {
+            var bodyComp = GetPlayerBodyComponent(p);
+            if (bodyComp != null)
+            {
+                bodyComp.Server_Freeze(RigidbodyConstraints.FreezeAll);
+                count++;
+            }
+        }
+        // Also freeze puck
+        try
+        {
+            var puck = UnityEngine.Object.FindFirstObjectByType<Puck>();
+            if (puck != null) puck.Rigidbody.constraints = RigidbodyConstraints.FreezeAll;
+        }
+        catch { }
+        ChatAuto("All players frozen (" + count + ")", ColToHex(ColCyan));
+        StatusOk("Froze all (" + count + " players)");
+    }
+
+    private static void CmdUnfreezeAll(string[] args)
+    {
+        var players = PlayerManager.Instance.GetPlayers();
+        int count = 0;
+        foreach (var p in players)
+        {
+            var bodyComp = GetPlayerBodyComponent(p);
+            if (bodyComp != null)
+            {
+                bodyComp.Server_Unfreeze();
+                count++;
+            }
+        }
+        // Also unfreeze puck
+        try
+        {
+            var puck = UnityEngine.Object.FindFirstObjectByType<Puck>();
+            if (puck != null) puck.Rigidbody.constraints = RigidbodyConstraints.None;
+        }
+        catch { }
+        ChatAuto("All players unfrozen (" + count + ")", ColToHex(ColGreen));
+        StatusOk("Unfroze all (" + count + " players)");
+    }
+
+    // ── KICK / BAN ──────────────────────────────────────────────
+
+    private static void CmdKick(string[] args)
+    {
+        Player target = GetTargetOrSelected(args);
+        if (target == null) { StatusWarn("Select a player or specify one"); return; }
+        try
+        {
+            ServerManager.Instance.Server_KickPlayer(target, DisconnectionCode.Kicked, GetReason());
+            StatusOk("Kicked " + SafeNetString(target.Username));
+        }
+        catch (Exception ex) { StatusErr("Kick failed: " + ex.Message); }
+    }
+
+    private static void CmdKickSteamId(string[] args)
+    {
+        if (args.Length < 1) { StatusWarn("Usage: /kicksteamid <steamid>"); return; }
+        string steamId = args[0];
+        var player = FindPlayerBySteamId(steamId);
+        if (player != null)
+        {
+            SelectPlayer(player);
+            CmdKick(new string[0]);
+        }
+        else
+        {
+            StatusWarn("Player not online: " + steamId);
+        }
+    }
 
     private static string GetReason()
     {
@@ -835,44 +1603,33 @@ public static class AdminPanel
 
     private static void DoKick()
     {
-        if (selectedPlayer == null) return;
-        try
+        ConfirmAction("kick", () =>
         {
-            ServerManager.Instance.Server_KickPlayer(selectedPlayer, DisconnectionCode.Kicked, GetReason(), true);
-            StatusOk("Kicked " + SafeNetString(selectedPlayer.Username));
-        }
-        catch (Exception ex)
-        {
-            StatusErr("Kick failed: " + ex.Message);
-        }
+            if (selectedPlayer == null) return;
+            try
+            {
+                ServerManager.Instance.Server_KickPlayer(selectedPlayer, DisconnectionCode.Kicked, GetReason());
+                StatusOk("Kicked " + SafeNetString(selectedPlayer.Username));
+            }
+            catch (Exception ex) { StatusErr("Kick failed: " + ex.Message); }
+        });
     }
 
     private static void DoBan()
     {
-        if (selectedPlayer == null) return;
-        string steamId = SafeNetString(selectedPlayer.SteamId);
-        if (string.IsNullOrEmpty(steamId) || steamId == "N/A")
+        ConfirmAction("ban", () =>
         {
-            StatusErr("Could not read Steam ID");
-            return;
-        }
-        try
-        {
-            BanManager.Instance.AddBannedSteamId(steamId);
-            ServerManager.Instance.Server_KickPlayer(selectedPlayer, DisconnectionCode.Banned, GetReason(), true);
-            StatusOk("Banned " + SafeNetString(selectedPlayer.Username));
-        }
-        catch (Exception ex)
-        {
-            StatusErr("Ban failed: " + ex.Message);
-        }
-    }
-
-    private static Player FindPlayerBySteamId(string steamId)
-    {
-        foreach (var p in PlayerManager.Instance.GetPlayers())
-            if (SafeNetString(p.SteamId) == steamId) return p;
-        return null;
+            if (selectedPlayer == null) return;
+            string steamId = SafeNetString(selectedPlayer.SteamId);
+            if (string.IsNullOrEmpty(steamId) || steamId == "N/A") { StatusErr("Could not read Steam ID"); return; }
+            try
+            {
+                BanManager.Instance.AddBannedSteamId(steamId);
+                ServerManager.Instance.Server_KickPlayer(selectedPlayer, DisconnectionCode.Banned, "Banned by admin");
+                StatusOk("Banned " + SafeNetString(selectedPlayer.Username));
+            }
+            catch (Exception ex) { StatusErr("Ban failed: " + ex.Message); }
+        });
     }
 
     private static void DoKickBySteamId()
@@ -902,11 +1659,139 @@ public static class AdminPanel
                 BanManager.Instance.AddBannedSteamId(steamId);
                 StatusOk("Banned offline: " + steamId);
             }
-            catch (Exception ex)
-            {
-                StatusErr("Ban failed: " + ex.Message);
-            }
+            catch (Exception ex) { StatusErr("Ban failed: " + ex.Message); }
         }
+    }
+
+    // ── PHYSICS ACTIONS ─────────────────────────────────────────
+
+    private static System.Random _rng = new System.Random();
+
+    private static void CmdSlap(string[] args)
+    {
+        Player target = GetTargetOrSelected(args);
+        if (target == null) { StatusWarn("Select a player or specify one"); return; }
+        var rb = GetPlayerRigidbody(target);
+        if (rb != null)
+        {
+            Vector3 force = new Vector3(
+                (float)(_rng.NextDouble() * 2 - 1) * 15f,
+                (float)(_rng.NextDouble()) * 10f + 5f,
+                (float)(_rng.NextDouble() * 2 - 1) * 15f
+            );
+            rb.AddForce(force, ForceMode.Impulse);
+            ChatAuto(
+                "Slapped " + SafeNetString(target.Username) + "!", ColToHex(ColYellow));
+            StatusOk("Slapped " + SafeNetString(target.Username));
+        }
+        else
+        {
+            StatusErr("No body found for " + SafeNetString(target.Username));
+        }
+    }
+
+    private static void CmdJump(string[] args)
+    {
+        Player target = GetTargetOrSelected(args);
+        if (target == null) { StatusWarn("Select a player or specify one"); return; }
+        var rb = GetPlayerRigidbody(target);
+        if (rb != null)
+        {
+            rb.AddForce(Vector3.up * 12f, ForceMode.Impulse);
+            StatusOk("Jumped " + SafeNetString(target.Username));
+        }
+        else
+        {
+            StatusErr("No body found for " + SafeNetString(target.Username));
+        }
+    }
+
+    // ── GAME STATE SETTERS ──────────────────────────────────────
+
+    private static void CmdSetTime(string[] args)
+    {
+        if (args.Length < 1 || !int.TryParse(args[0], out int seconds))
+        {
+            StatusWarn("Usage: /settime <seconds>");
+            return;
+        }
+        GameManager.Instance.Server_SetGameState(phase: null, tick: seconds, period: null,
+            blueScore: null, redScore: null, isOvertime: null);
+        StatusOk("Time set to " + seconds + "s");
+    }
+
+    private static void CmdSetGoals(string[] args)
+    {
+        if (args.Length < 2) { StatusWarn("Usage: /setgoals <blue|red> <amount|+N|-N>"); return; }
+        string team = args[0].ToLowerInvariant();
+        string amountStr = args[1];
+        int blueScore = GameManager.Instance.GameState.Value.BlueScore;
+        int redScore = GameManager.Instance.GameState.Value.RedScore;
+
+        if (team == "blue" || team == "b")
+        {
+            if (amountStr.StartsWith("+") && int.TryParse(amountStr.Substring(1), out int addB))
+                blueScore += addB;
+            else if (amountStr.StartsWith("-") && int.TryParse(amountStr.Substring(1), out int subB))
+                blueScore = Mathf.Max(0, blueScore - subB);
+            else if (int.TryParse(amountStr, out int absB))
+                blueScore = absB;
+            else { StatusErr("Invalid amount: " + amountStr); return; }
+        }
+        else if (team == "red" || team == "r")
+        {
+            if (amountStr.StartsWith("+") && int.TryParse(amountStr.Substring(1), out int addR))
+                redScore += addR;
+            else if (amountStr.StartsWith("-") && int.TryParse(amountStr.Substring(1), out int subR))
+                redScore = Mathf.Max(0, redScore - subR);
+            else if (int.TryParse(amountStr, out int absR))
+                redScore = absR;
+            else { StatusErr("Invalid amount: " + amountStr); return; }
+        }
+        else
+        {
+            StatusErr("Invalid team: " + team);
+            return;
+        }
+        blueScore = Mathf.Max(0, blueScore);
+        redScore = Mathf.Max(0, redScore);
+        GameManager.Instance.Server_SetGameState(phase: null, tick: null, period: null,
+            blueScore: blueScore, redScore: redScore, isOvertime: null);
+        StatusOk($"Score: Blue {blueScore} - Red {redScore}");
+    }
+
+    private static void CmdSetState(string[] args)
+    {
+        if (args.Length < 1 || !int.TryParse(args[0], out int period))
+        {
+            StatusWarn("Usage: /setstate <period> (1-3, 4+=OT)");
+            return;
+        }
+        GameManager.Instance.Server_SetGameState(phase: null, tick: null, period: period,
+            blueScore: null, redScore: null, isOvertime: period > 3);
+        string label = period > 3 ? "OT" : "P" + period;
+        ChatAuto("Period: " + label, ColToHex(ColAccent));
+        StatusOk("Period set: " + label);
+    }
+
+    // ── HELPERS ─────────────────────────────────────────────────
+
+    private static Player GetTargetOrSelected(string[] args)
+    {
+        if (args.Length > 0)
+        {
+            var p = FindPlayerByNeedle(args[0]);
+            if (p != null) return p;
+        }
+        return selectedPlayer;
+    }
+
+    private static string ColToHex(Color c)
+    {
+        int r = Mathf.RoundToInt(c.r * 255);
+        int g = Mathf.RoundToInt(c.g * 255);
+        int b = Mathf.RoundToInt(c.b * 255);
+        return "#" + r.ToString("X2") + g.ToString("X2") + b.ToString("X2");
     }
 }
 

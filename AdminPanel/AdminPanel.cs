@@ -94,8 +94,7 @@ namespace AdminPanel
             }
             return null;
         }
-
-    {
+        
         private static MethodInfo s_BanMethod;
         private static MethodInfo s_KickMethod;
         private static MethodInfo s_FreezeMethod;
