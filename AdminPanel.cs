@@ -346,6 +346,9 @@ public static class ServerCommandHandler
 }
 public class AdminPanelBehaviour : MonoBehaviour
 {
+    public static AdminPanelBehaviour Instance { get; private set; }
+
+    void Awake() { Instance = this; }
     void Start() { StartCoroutine(InitDelayed()); }
 
     System.Collections.IEnumerator InitDelayed()
@@ -357,7 +360,12 @@ public class AdminPanelBehaviour : MonoBehaviour
     }
 
     void Update() { AdminPanel.Tick(); }
-    void OnDestroy() { AdminPanel.Destroy(); }
+
+    void OnDestroy()
+    {
+        if (Instance == this) Instance = null;
+        AdminPanel.Destroy();
+    }
 }
 
 public static class AdminPanel
@@ -1086,15 +1094,32 @@ public static class AdminPanel
         {
             if (!IsInServer())
                 return;
+            // Check immediately, and retry once after a short delay for server sync
             CheckLocalPlayerAdmin();
             if (!localPlayerIsAdmin)
             {
-                StatusWarn("You are not in the admin list");
-                Debug.Log("[AdminPanel] Panel open blocked — localPlayerIsAdmin=" + localPlayerIsAdmin);
+                Debug.Log("[AdminPanel] Panel open blocked — retrying after delay");
+                AdminPanelBehaviour.Instance?.StartCoroutine(DelayedAdminCheck());
                 return;
             }
         }
         if (panelVisible) Hide(); else Show();
+    }
+
+    private static System.Collections.IEnumerator DelayedAdminCheck()
+    {
+        yield return new WaitForSeconds(0.5f);
+        CheckLocalPlayerAdmin();
+        if (localPlayerIsAdmin)
+        {
+            Debug.Log("[AdminPanel] Admin authorized on retry");
+            Show();
+        }
+        else
+        {
+            StatusWarn("You are not in the admin list");
+            Debug.Log("[AdminPanel] Panel open blocked after retry — localPlayerIsAdmin=" + localPlayerIsAdmin);
+        }
     }
 
     public static void Show()
@@ -1305,15 +1330,9 @@ public static class AdminPanel
                 return;
             }
 
-            // 1) Check admin_steam_ids.json on disk (game root folder)
-            if (CheckAdminFile(localSteamId))
-            {
-                localPlayerIsAdmin = true;
-                Debug.Log("[AdminPanel] Admin check: authorized via admin_steam_ids.json");
-                return;
-            }
-
-            // 2) Check AdminLevel NetworkVariable (synced from server)
+            // 1) Check AdminLevel NetworkVariable (synced from server)
+            //    The server reads admin_steam_ids.json and sets AdminLevel on each player.
+            //    This is the authoritative admin check — the server tells us who is admin.
             var pm = PlayerManager.Instance;
             if (pm != null)
             {
