@@ -54,8 +54,8 @@ public class PluginMain : IPuckPlugin
 }
 
 /// <summary>
-/// Handles custom admin panel commands on the server via EventManager.
-/// Registered only when the mod runs in a server process (listen or dedicated).
+/// Handles custom admin panel commands on the server.
+/// Uses Unity Netcode's CustomMessagingManager — no chat system involvement.
 /// </summary>
 public static class ServerCommandHandler
 {
@@ -65,7 +65,7 @@ public static class ServerCommandHandler
         {
             var nm = Unity.Netcode.NetworkManager.Singleton;
             if (nm == null || !nm.IsServer) return;
-            EventManager.AddEventListener("Event_Server_OnChatCommand", OnServerChatCommand);
+            nm.CustomMessagingManager.RegisterNamedMessageHandler("AdminPanelCmd", OnNamedMessage);
             Debug.Log("[AdminPanel] Server command handler registered");
         }
         catch { }
@@ -73,243 +73,62 @@ public static class ServerCommandHandler
 
     public static void Unregister()
     {
-        try { EventManager.RemoveEventListener("Event_Server_OnChatCommand", OnServerChatCommand); }
+        try
+        {
+            var nm = Unity.Netcode.NetworkManager.Singleton;
+            if (nm != null && nm.CustomMessagingManager != null)
+                nm.CustomMessagingManager.UnregisterNamedMessageHandler("AdminPanelCmd");
+        }
         catch { }
     }
 
-    private static void OnServerChatCommand(Dictionary<string, object> data)
+    private static void OnNamedMessage(ulong senderClientId, Unity.Netcode.FastBufferReader reader)
     {
         try
         {
-            ulong clientId = (ulong)data["clientId"];
-            string command = (string)data["command"];
-            string[] args = (string[])data["args"];
+            reader.ReadValueSafe(out int length);
+            byte[] data = new byte[length];
+            reader.ReadBytesSafe(ref data, length);
+            string command = System.Text.Encoding.UTF8.GetString(data);
+            ExecuteRaw(command);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError("[AdminPanel] Named message error: " + ex.ToString());
+        }
+    }
 
-            switch (command)
+    /// <summary>Parse and execute a command string on the server.</summary>
+    public static void ExecuteRaw(string full)
+    {
+        try
+        {
+            var parts = full.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) return;
+            string cmd = parts[0].ToLowerInvariant();
+            var args = parts.Skip(1).ToArray();
+
+            switch (cmd)
             {
-                case "/warmup":
-                {
-                    float seconds = 60f;
-                    if (args.Length > 0) float.TryParse(args[0], out seconds);
-                    var gm = GameManager.Instance;
-                    gm.Server_SetGameState(phase: GamePhase.Warmup, tick: (int)seconds,
-                        period: gm.GameState.Value.Period,
-                        blueScore: gm.GameState.Value.BlueScore,
-                        redScore: gm.GameState.Value.RedScore,
-                        isOvertime: gm.GameState.Value.IsOvertime);
-                    gm.Server_StartTicking();
-                    ChatManager.Instance.Server_SendChatMessage("Warmup started (" + (int)seconds + "s)", "#2ecc71", clientId);
-                    break;
-                }
-                case "/start":
-                {
-                    var gm = GameManager.Instance;
-                    gm.Server_SetGameState(phase: GamePhase.Play, tick: 300,
-                        period: gm.GameState.Value.Period,
-                        blueScore: 0, redScore: 0, isOvertime: false);
-                    gm.Server_StartTicking();
-                    ChatManager.Instance.Server_SendChatMessage("Game started!", "#2ecc71", clientId);
-                    break;
-                }
-                case "/pause":
-                {
-                    var gm = GameManager.Instance;
-                    var gs = gm.GameState.Value;
-                    gm.Server_SetGameState(phase: GamePhase.Warmup, tick: gs.Tick, period: gs.Period,
-                        blueScore: gs.BlueScore, redScore: gs.RedScore, isOvertime: false);
-                    gm.Server_StopTicking();
-                    ChatManager.Instance.Server_SendChatMessage("Game paused", "#e67e22", clientId);
-                    break;
-                }
-                case "/resume":
-                {
-                    var gm = GameManager.Instance;
-                    var gs = gm.GameState.Value;
-                    gm.Server_SetGameState(phase: GamePhase.Play, tick: gs.Tick, period: gs.Period,
-                        blueScore: gs.BlueScore, redScore: gs.RedScore, isOvertime: gs.IsOvertime);
-                    gm.Server_StartTicking();
-                    ChatManager.Instance.Server_SendChatMessage("Game resumed", "#2ecc71", clientId);
-                    break;
-                }
-                case "/pauseall":
-                {
-                    var gm = GameManager.Instance;
-                    var gs = gm.GameState.Value;
-                    gm.Server_SetGameState(phase: GamePhase.Warmup, tick: gs.Tick, period: gs.Period,
-                        blueScore: gs.BlueScore, redScore: gs.RedScore, isOvertime: false);
-                    gm.Server_StopTicking();
-                    foreach (var p in PlayerManager.Instance.GetPlayers())
-                        if (p.PlayerBody != null) p.PlayerBody.Server_Freeze(UnityEngine.RigidbodyConstraints.FreezeAll);
-                    ChatManager.Instance.Server_SendChatMessage("All paused & frozen", "#e67e22", clientId);
-                    break;
-                }
-                case "/resumeall":
-                {
-                    var gm = GameManager.Instance;
-                    var gs = gm.GameState.Value;
-                    gm.Server_SetGameState(phase: GamePhase.Play, tick: gs.Tick, period: gs.Period,
-                        blueScore: gs.BlueScore, redScore: gs.RedScore, isOvertime: gs.IsOvertime);
-                    gm.Server_StartTicking();
-                    foreach (var p in PlayerManager.Instance.GetPlayers())
-                        if (p.PlayerBody != null) p.PlayerBody.Server_Unfreeze();
-                    ChatManager.Instance.Server_SendChatMessage("All resumed & unfrozen", "#2ecc71", clientId);
-                    break;
-                }
-                case "/freeze":
-                {
-                    if (args.Length > 0 && args[0].ToLowerInvariant() == "puck")
-                    {
-                        var puck = UnityEngine.Object.FindFirstObjectByType<Puck>();
-                        if (puck != null) puck.Rigidbody.constraints = UnityEngine.RigidbodyConstraints.FreezeAll;
-                    }
-                    else if (args.Length > 0)
-                    {
-                        var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
-                        if (target?.PlayerBody != null)
-                            target.PlayerBody.Server_Freeze(UnityEngine.RigidbodyConstraints.FreezeAll);
-                    }
-                    break;
-                }
-                case "/unfreeze":
-                {
-                    if (args.Length > 0 && args[0].ToLowerInvariant() == "puck")
-                    {
-                        var puck = UnityEngine.Object.FindFirstObjectByType<Puck>();
-                        if (puck != null) puck.Rigidbody.constraints = UnityEngine.RigidbodyConstraints.None;
-                    }
-                    else if (args.Length > 0)
-                    {
-                        var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
-                        if (target?.PlayerBody != null) target.PlayerBody.Server_Unfreeze();
-                    }
-                    break;
-                }
-                case "/freezeall":
-                {
-                    foreach (var p in PlayerManager.Instance.GetPlayers())
-                        if (p.PlayerBody != null) p.PlayerBody.Server_Freeze(UnityEngine.RigidbodyConstraints.FreezeAll);
-                    var puck2 = UnityEngine.Object.FindFirstObjectByType<Puck>();
-                    if (puck2 != null) puck2.Rigidbody.constraints = UnityEngine.RigidbodyConstraints.FreezeAll;
-                    break;
-                }
-                case "/unfreezeall":
-                {
-                    foreach (var p in PlayerManager.Instance.GetPlayers())
-                        if (p.PlayerBody != null) p.PlayerBody.Server_Unfreeze();
-                    var puck3 = UnityEngine.Object.FindFirstObjectByType<Puck>();
-                    if (puck3 != null) puck3.Rigidbody.constraints = UnityEngine.RigidbodyConstraints.None;
-                    break;
-                }
-                case "/changeteam":
-                {
-                    if (args.Length >= 2)
-                    {
-                        var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
-                        if (target != null)
-                        {
-                            PlayerTeam team;
-                            switch (args[1].ToLowerInvariant())
-                            {
-                                case "blue": case "b": team = PlayerTeam.Blue; break;
-                                case "red": case "r": team = PlayerTeam.Red; break;
-                                case "spectator": case "spec": case "s": team = PlayerTeam.Spectator; break;
-                                default: team = PlayerTeam.None; break;
-                            }
-                            if (team != PlayerTeam.None) target.Server_SetGameState(team: team);
-                        }
-                    }
-                    break;
-                }
-                case "/swap":
-                {
-                    if (args.Length >= 2)
-                    {
-                        var p1 = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
-                        var p2 = PlayerManager.Instance.GetPlayerByNeedle(args[1]);
-                        if (p1 != null && p2 != null)
-                        {
-                            var t1 = p1.GameState.Value.Team;
-                            var t2 = p2.GameState.Value.Team;
-                            p1.Server_SetGameState(team: t2);
-                            p2.Server_SetGameState(team: t1);
-                        }
-                    }
-                    break;
-                }
-                case "/slap":
-                {
-                    if (args.Length > 0)
-                    {
-                        var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
-                        if (target?.PlayerBody?.Rigidbody != null)
-                        {
-                            var rng = new System.Random();
-                            target.PlayerBody.Rigidbody.AddForce(new Vector3(
-                                (float)(rng.NextDouble() * 2 - 1) * 15f,
-                                (float)(rng.NextDouble()) * 10f + 5f,
-                                (float)(rng.NextDouble() * 2 - 1) * 15f
-                            ), UnityEngine.ForceMode.Impulse);
-                        }
-                    }
-                    break;
-                }
-                case "/jump":
-                {
-                    if (args.Length > 0)
-                    {
-                        var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
-                        if (target?.PlayerBody?.Rigidbody != null)
-                            target.PlayerBody.Rigidbody.AddForce(Vector3.up * 12f, UnityEngine.ForceMode.Impulse);
-                    }
-                    break;
-                }
-                case "/mute":
-                {
-                    if (args.Length > 0)
-                    {
-                        var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
-                        if (target != null) target.IsMuted.Value = true;
-                    }
-                    break;
-                }
-                case "/unmute":
-                {
-                    if (args.Length > 0)
-                    {
-                        var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
-                        if (target != null) target.IsMuted.Value = false;
-                    }
-                    break;
-                }
-                case "/settime":
-                {
-                    if (args.Length > 0 && int.TryParse(args[0], out int seconds))
-                        GameManager.Instance.Server_SetGameState(tick: seconds);
-                    break;
-                }
-                case "/setgoals":
-                {
-                    if (args.Length >= 2 && int.TryParse(args[1], out int goals))
-                    {
-                        var gm = GameManager.Instance;
-                        var gs = gm.GameState.Value;
-                        int blue = gs.BlueScore;
-                        int red = gs.RedScore;
-                        switch (args[0].ToLowerInvariant())
-                        {
-                            case "blue": case "b": blue = Mathf.Max(0, goals); break;
-                            case "red": case "r": red = Mathf.Max(0, goals); break;
-                        }
-                        gm.Server_SetGameState(blueScore: blue, redScore: red);
-                    }
-                    break;
-                }
-                case "/setstate":
-                {
-                    if (args.Length > 0 && int.TryParse(args[0], out int state))
-                        GameManager.Instance.Server_SetGameState(phase: (GamePhase)state);
-                    break;
-                }
+                case "/warmup": Warmup(args); break;
+                case "/start": Start(args); break;
+                case "/pause": Pause(args); break;
+                case "/resume": Resume(args); break;
+                case "/pauseall": PauseAll(args); break;
+                case "/resumeall": ResumeAll(args); break;
+                case "/freeze": Freeze(args); break;
+                case "/unfreeze": Unfreeze(args); break;
+                case "/freezeall": FreezeAll(args); break;
+                case "/unfreezeall": UnfreezeAll(args); break;
+                case "/changeteam": ChangeTeam(args); break;
+                case "/swap": Swap(args); break;
+                case "/slap": Slap(args); break;
+                case "/jump": Jump(args); break;
+                case "/mute": Mute(args); break;
+                case "/unmute": Unmute(args); break;
+                case "/settime": SetTime(args); break;
+                case "/setgoals": SetGoals(args); break;
+                case "/setstate": SetState(args); break;
             }
         }
         catch (Exception ex)
@@ -317,8 +136,196 @@ public static class ServerCommandHandler
             Debug.LogError("[AdminPanel] Server command handler error: " + ex.ToString());
         }
     }
-}
 
+    private static void Warmup(string[] args)
+    {
+        float seconds = 60f;
+        if (args.Length > 0) float.TryParse(args[0], out seconds);
+        var gm = GameManager.Instance;
+        gm.Server_SetGameState(phase: GamePhase.Warmup, tick: (int)seconds,
+            period: gm.GameState.Value.Period,
+            blueScore: gm.GameState.Value.BlueScore,
+            redScore: gm.GameState.Value.RedScore,
+            isOvertime: gm.GameState.Value.IsOvertime);
+        gm.Server_StartTicking();
+    }
+
+    private static void Start(string[] args)
+    {
+        var gm = GameManager.Instance;
+        gm.Server_SetGameState(phase: GamePhase.Play, tick: 300,
+            period: gm.GameState.Value.Period,
+            blueScore: 0, redScore: 0, isOvertime: false);
+        gm.Server_StartTicking();
+    }
+
+    private static void Pause(string[] args)
+    {
+        var gm = GameManager.Instance;
+        var gs = gm.GameState.Value;
+        gm.Server_SetGameState(phase: GamePhase.Warmup, tick: gs.Tick, period: gs.Period,
+            blueScore: gs.BlueScore, redScore: gs.RedScore, isOvertime: false);
+        gm.Server_StopTicking();
+    }
+
+    private static void Resume(string[] args)
+    {
+        var gm = GameManager.Instance;
+        var gs = gm.GameState.Value;
+        gm.Server_SetGameState(phase: GamePhase.Play, tick: gs.Tick, period: gs.Period,
+            blueScore: gs.BlueScore, redScore: gs.RedScore, isOvertime: gs.IsOvertime);
+        gm.Server_StartTicking();
+    }
+
+    private static void PauseAll(string[] args)
+    {
+        Pause(args);
+        foreach (var p in PlayerManager.Instance.GetPlayers())
+            if (p.PlayerBody != null) p.PlayerBody.Server_Freeze(UnityEngine.RigidbodyConstraints.FreezeAll);
+    }
+
+    private static void ResumeAll(string[] args)
+    {
+        Resume(args);
+        foreach (var p in PlayerManager.Instance.GetPlayers())
+            if (p.PlayerBody != null) p.PlayerBody.Server_Unfreeze();
+    }
+
+    private static void Freeze(string[] args)
+    {
+        if (args.Length > 0 && args[0].ToLowerInvariant() == "puck")
+        {
+            var puck = UnityEngine.Object.FindFirstObjectByType<Puck>();
+            if (puck != null) puck.Rigidbody.constraints = UnityEngine.RigidbodyConstraints.FreezeAll;
+        }
+        else if (args.Length > 0)
+        {
+            var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
+            if (target?.PlayerBody != null)
+                target.PlayerBody.Server_Freeze(UnityEngine.RigidbodyConstraints.FreezeAll);
+        }
+    }
+
+    private static void Unfreeze(string[] args)
+    {
+        if (args.Length > 0 && args[0].ToLowerInvariant() == "puck")
+        {
+            var puck = UnityEngine.Object.FindFirstObjectByType<Puck>();
+            if (puck != null) puck.Rigidbody.constraints = UnityEngine.RigidbodyConstraints.None;
+        }
+        else if (args.Length > 0)
+        {
+            var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
+            if (target?.PlayerBody != null) target.PlayerBody.Server_Unfreeze();
+        }
+    }
+
+    private static void FreezeAll(string[] args)
+    {
+        foreach (var p in PlayerManager.Instance.GetPlayers())
+            if (p.PlayerBody != null) p.PlayerBody.Server_Freeze(UnityEngine.RigidbodyConstraints.FreezeAll);
+        var puck2 = UnityEngine.Object.FindFirstObjectByType<Puck>();
+        if (puck2 != null) puck2.Rigidbody.constraints = UnityEngine.RigidbodyConstraints.FreezeAll;
+    }
+
+    private static void UnfreezeAll(string[] args)
+    {
+        foreach (var p in PlayerManager.Instance.GetPlayers())
+            if (p.PlayerBody != null) p.PlayerBody.Server_Unfreeze();
+        var puck3 = UnityEngine.Object.FindFirstObjectByType<Puck>();
+        if (puck3 != null) puck3.Rigidbody.constraints = UnityEngine.RigidbodyConstraints.None;
+    }
+
+    private static void ChangeTeam(string[] args)
+    {
+        if (args.Length < 2) return;
+        var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
+        if (target == null) return;
+        PlayerTeam team;
+        switch (args[1].ToLowerInvariant())
+        {
+            case "blue": case "b": team = PlayerTeam.Blue; break;
+            case "red": case "r": team = PlayerTeam.Red; break;
+            case "spectator": case "spec": case "s": team = PlayerTeam.Spectator; break;
+            default: team = PlayerTeam.None; break;
+        }
+        if (team != PlayerTeam.None) target.Server_SetGameState(team: team);
+    }
+
+    private static void Swap(string[] args)
+    {
+        if (args.Length < 2) return;
+        var p1 = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
+        var p2 = PlayerManager.Instance.GetPlayerByNeedle(args[1]);
+        if (p1 == null || p2 == null) return;
+        var t1 = p1.GameState.Value.Team;
+        var t2 = p2.GameState.Value.Team;
+        p1.Server_SetGameState(team: t2);
+        p2.Server_SetGameState(team: t1);
+    }
+
+    private static void Slap(string[] args)
+    {
+        if (args.Length < 1) return;
+        var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
+        if (target?.PlayerBody?.Rigidbody == null) return;
+        var rng = new System.Random();
+        target.PlayerBody.Rigidbody.AddForce(new Vector3(
+            (float)(rng.NextDouble() * 2 - 1) * 15f,
+            (float)(rng.NextDouble()) * 10f + 5f,
+            (float)(rng.NextDouble() * 2 - 1) * 15f
+        ), UnityEngine.ForceMode.Impulse);
+    }
+
+    private static void Jump(string[] args)
+    {
+        if (args.Length < 1) return;
+        var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
+        if (target?.PlayerBody?.Rigidbody != null)
+            target.PlayerBody.Rigidbody.AddForce(Vector3.up * 12f, UnityEngine.ForceMode.Impulse);
+    }
+
+    private static void Mute(string[] args)
+    {
+        if (args.Length < 1) return;
+        var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
+        if (target != null) target.IsMuted.Value = true;
+    }
+
+    private static void Unmute(string[] args)
+    {
+        if (args.Length < 1) return;
+        var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
+        if (target != null) target.IsMuted.Value = false;
+    }
+
+    private static void SetTime(string[] args)
+    {
+        if (args.Length < 1 || !int.TryParse(args[0], out int seconds)) return;
+        GameManager.Instance.Server_SetGameState(tick: seconds);
+    }
+
+    private static void SetGoals(string[] args)
+    {
+        if (args.Length < 2 || !int.TryParse(args[1], out int goals)) return;
+        var gm = GameManager.Instance;
+        var gs = gm.GameState.Value;
+        int blue = gs.BlueScore;
+        int red = gs.RedScore;
+        switch (args[0].ToLowerInvariant())
+        {
+            case "blue": case "b": blue = Mathf.Max(0, goals); break;
+            case "red": case "r": red = Mathf.Max(0, goals); break;
+        }
+        gm.Server_SetGameState(blueScore: blue, redScore: red);
+    }
+
+    private static void SetState(string[] args)
+    {
+        if (args.Length < 1 || !int.TryParse(args[0], out int state)) return;
+        GameManager.Instance.Server_SetGameState(phase: (GamePhase)state);
+    }
+}
 public class AdminPanelBehaviour : MonoBehaviour
 {
     void Start() { StartCoroutine(InitDelayed()); }
@@ -1601,19 +1608,32 @@ public static class AdminPanel
 
     // ── COMMAND EXECUTOR ────────────────────────────────────────
 
-    /// <summary>Sends a command via the chat RPC so the server processes it like a chat command.</summary>
-    private static void SendChatCmd(string command)
+    /// <summary>Sends a command to the server via a named network message (bypasses chat system entirely).</summary>
+    private static void SendServerCmd(string command)
     {
         try
         {
-            var cm = ChatManager.Instance;
-            if (cm == null) { StatusErr("ChatManager not available"); return; }
-            cm.Client_SendChatMessage(command, false, false);
+            var nm = Unity.Netcode.NetworkManager.Singleton;
+            if (nm == null || !nm.IsConnectedClient) { StatusErr("Not connected"); return; }
+            if (nm.IsServer && nm.IsHost)
+            {
+                // Listen server — execute directly
+                ServerCommandHandler.ExecuteRaw(command);
+                return;
+            }
+            // Dedicated server client — send via named message
+            byte[] data = System.Text.Encoding.UTF8.GetBytes(command);
+            using (var writer = new Unity.Netcode.FastBufferWriter(data.Length + 4, Unity.Collections.Allocator.Temp))
+            {
+                writer.WriteValueSafe(data.Length);
+                writer.WriteBytesSafe(data);
+                nm.CustomMessagingManager.SendNamedMessage("AdminPanelCmd", new ulong[] { Unity.Netcode.NetworkManager.ServerClientId }, writer);
+            }
         }
         catch (Exception ex)
         {
             StatusErr("Failed to send command: " + ex.Message);
-            Debug.LogError("[AdminPanel] SendChatCmd error: " + ex.ToString());
+            Debug.LogError("[AdminPanel] SendServerCmd error: " + ex.ToString());
         }
     }
 
@@ -1687,40 +1707,40 @@ public static class AdminPanel
         float seconds = 60f;
         if (args.Length > 0 && !float.TryParse(args[0], out seconds)) seconds = 60f;
         ChatAuto($"Warmup started ({seconds}s)", ColYellow);
-        SendChatCmd("/warmup " + (int)seconds);
+        SendServerCmd("/warmup " + (int)seconds);
         StatusOk($"Warmup: {seconds}s");
     }
 
     private static void CmdStart(string[] args)
     {
         ChatAuto("Game started!", ColGreen);
-        SendChatCmd("/start");
+        SendServerCmd("/start");
         StatusOk("Game started");
     }
 
     private static void CmdPause(string[] args)
     {
-        SendChatCmd("/pause");
+        SendServerCmd("/pause");
         ChatAuto("Game paused", ColOrange);
         StatusOk("Paused");
     }
 
     private static void CmdResume(string[] args)
     {
-        SendChatCmd("/resume");
+        SendServerCmd("/resume");
         ChatAuto("Game resumed", ColGreen);
         StatusOk("Resumed");
     }
 
     private static void CmdPauseAll(string[] args)
     {
-        SendChatCmd("/pauseall");
+        SendServerCmd("/pauseall");
         StatusOk("Paused & froze all");
     }
 
     private static void CmdResumeAll(string[] args)
     {
-        SendChatCmd("/resumeall");
+        SendServerCmd("/resumeall");
         StatusOk("Resumed & unfroze all");
     }
 
@@ -1731,14 +1751,14 @@ public static class AdminPanel
         if (args.Length < 1) { StatusWarn("Usage: /mute <player> [duration]"); return; }
         string needle = args[0];
         string duration = args.Length > 1 ? args[1] : "permanent";
-        SendChatCmd("/mute " + needle + " " + duration);
+        SendServerCmd("/mute " + needle + " " + duration);
         StatusOk("Muted " + needle);
     }
 
     private static void CmdUnmute(string[] args)
     {
         if (args.Length < 1) { StatusWarn("Usage: /unmute <player>"); return; }
-        SendChatCmd("/unmute " + args[0]);
+        SendServerCmd("/unmute " + args[0]);
         StatusOk("Unmuted " + args[0]);
     }
 
@@ -1783,14 +1803,14 @@ public static class AdminPanel
     private static void CmdChangeTeam(string[] args)
     {
         if (args.Length < 2) { StatusWarn("Usage: /changeteam <player> <blue|red|spectator>"); return; }
-        SendChatCmd("/changeteam " + args[0] + " " + args[1]);
+        SendServerCmd("/changeteam " + args[0] + " " + args[1]);
         StatusOk("Team change sent to server");
     }
 
     private static void CmdSwap(string[] args)
     {
         if (args.Length < 2) { StatusWarn("Usage: /swap <player1> <player2>"); return; }
-        SendChatCmd("/swap " + args[0] + " " + args[1]);
+        SendServerCmd("/swap " + args[0] + " " + args[1]);
         StatusOk("Swap sent to server");
     }
 
@@ -1809,12 +1829,12 @@ public static class AdminPanel
     {
         if (args.Length > 0 && args[0].ToLowerInvariant() == "puck")
         {
-            SendChatCmd("/freeze puck");
+            SendServerCmd("/freeze puck");
             return;
         }
         Player target = GetTargetOrSelected(args);
         if (target == null) { StatusWarn("Select a player or specify one"); return; }
-        SendChatCmd("/freeze " + SafeNetString(target.Username));
+        SendServerCmd("/freeze " + SafeNetString(target.Username));
         StatusOk("Frozen " + SafeNetString(target.Username));
     }
 
@@ -1822,37 +1842,37 @@ public static class AdminPanel
     {
         if (args.Length > 0 && args[0].ToLowerInvariant() == "puck")
         {
-            SendChatCmd("/unfreeze puck");
+            SendServerCmd("/unfreeze puck");
             return;
         }
         Player target = GetTargetOrSelected(args);
         if (target == null) { StatusWarn("Select a player or specify one"); return; }
-        SendChatCmd("/unfreeze " + SafeNetString(target.Username));
+        SendServerCmd("/unfreeze " + SafeNetString(target.Username));
         StatusOk("Unfrozen " + SafeNetString(target.Username));
     }
 
     private static void CmdFreezePuck()
     {
-        SendChatCmd("/freeze puck");
+        SendServerCmd("/freeze puck");
         StatusOk("Puck frozen");
     }
 
     private static void CmdUnfreezePuck()
     {
-        SendChatCmd("/unfreeze puck");
+        SendServerCmd("/unfreeze puck");
         StatusOk("Puck unfrozen");
     }
 
     private static void CmdFreezeAll(string[] args)
     {
-        SendChatCmd("/freezeall");
+        SendServerCmd("/freezeall");
         ChatAuto("All players frozen", ColToHex(ColCyan));
         StatusOk("Froze all");
     }
 
     private static void CmdUnfreezeAll(string[] args)
     {
-        SendChatCmd("/unfreezeall");
+        SendServerCmd("/unfreezeall");
         ChatAuto("All players unfrozen", ColToHex(ColGreen));
         StatusOk("Unfroze all");
     }
@@ -1863,7 +1883,7 @@ public static class AdminPanel
     {
         Player target = GetTargetOrSelected(args);
         if (target == null) { StatusWarn("Select a player or specify one"); return; }
-        SendChatCmd("/kick " + SafeNetString(target.Username));
+        SendServerCmd("/kick " + SafeNetString(target.Username));
         StatusOk("Kick sent to server for " + SafeNetString(target.Username));
     }
 
@@ -1892,7 +1912,7 @@ public static class AdminPanel
     {
         if (!RequireAdmin()) return;
         if (selectedPlayer == null) return;
-        SendChatCmd("/kick " + SafeNetString(selectedPlayer.Username));
+        SendServerCmd("/kick " + SafeNetString(selectedPlayer.Username));
         StatusOk("Kick sent to server for " + SafeNetString(selectedPlayer.Username));
     }
 
@@ -1900,7 +1920,7 @@ public static class AdminPanel
     {
         if (!RequireAdmin()) return;
         if (selectedPlayer == null) return;
-        SendChatCmd("/ban " + SafeNetString(selectedPlayer.Username));
+        SendServerCmd("/ban " + SafeNetString(selectedPlayer.Username));
         StatusOk("Ban sent to server for " + SafeNetString(selectedPlayer.Username));
     }
 
@@ -1910,7 +1930,7 @@ public static class AdminPanel
     {
         Player target = GetTargetOrSelected(args);
         if (target == null) { StatusWarn("Select a player or specify one"); return; }
-        SendChatCmd("/slap " + SafeNetString(target.Username));
+        SendServerCmd("/slap " + SafeNetString(target.Username));
         StatusOk("Slapped " + SafeNetString(target.Username));
     }
 
@@ -1918,7 +1938,7 @@ public static class AdminPanel
     {
         Player target = GetTargetOrSelected(args);
         if (target == null) { StatusWarn("Select a player or specify one"); return; }
-        SendChatCmd("/jump " + SafeNetString(target.Username));
+        SendServerCmd("/jump " + SafeNetString(target.Username));
         StatusOk("Jump sent to server for " + SafeNetString(target.Username));
     }
 
@@ -1927,21 +1947,21 @@ public static class AdminPanel
     private static void CmdSetTime(string[] args)
     {
         if (args.Length < 1) { StatusWarn("Usage: /settime <seconds>"); return; }
-        SendChatCmd("/settime " + args[0]);
+        SendServerCmd("/settime " + args[0]);
         StatusOk("Set time to " + args[0] + "s");
     }
 
     private static void CmdSetGoals(string[] args)
     {
         if (args.Length < 2) { StatusWarn("Usage: /setgoals <blue|red> <goals>"); return; }
-        SendChatCmd("/setgoals " + args[0] + " " + args[1]);
+        SendServerCmd("/setgoals " + args[0] + " " + args[1]);
         StatusOk("Set goals sent to server");
     }
 
     private static void CmdSetState(string[] args)
     {
         if (args.Length < 1) { StatusWarn("Usage: /setstate <0-8>"); return; }
-        SendChatCmd("/setstate " + args[0]);
+        SendServerCmd("/setstate " + args[0]);
         StatusOk("Set state to " + args[0]);
     }
 
@@ -1960,7 +1980,7 @@ public static class AdminPanel
         if (string.IsNullOrEmpty(steamId)) { StatusWarn("Enter a Steam ID first"); return; }
         var player = FindPlayerBySteamId(steamId);
         if (player != null) { SelectPlayer(player); DoBan(); }
-        else { SendChatCmd("/ban " + steamId); StatusOk("Ban sent for " + steamId); }
+        else { SendServerCmd("/ban " + steamId); StatusOk("Ban sent for " + steamId); }
     }
 
     // ── HELPERS ─────────────────────────────────────────────────
