@@ -5,6 +5,7 @@ using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
 using UnityEngine.UIElements;
+using Unity.Netcode;
 
 namespace AdminPanel
 {
@@ -132,7 +133,14 @@ namespace AdminPanel
 
         public static bool IsLocalAdmin(string steamId)
         {
-            try { return AdminManager.IsAdmin(steamId); }
+            try
+            {
+                // Dedicated server: operator is inherently admin
+                var nm = Unity.Netcode.NetworkManager.Singleton;
+                if (nm != null && nm.IsServer && !nm.IsHost)
+                    return true;
+                return AdminManager.IsAdmin(steamId);
+            }
             catch { return false; }
         }
 

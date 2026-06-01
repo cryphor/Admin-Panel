@@ -18,12 +18,20 @@ public class PluginMain : IPuckPlugin
 
     public bool OnEnable()
     {
-        harmony = new Harmony("com.puck.adminpanel");
-        harmony.PatchAll();
-        panelGO = new GameObject("AdminPanelView");
-        UnityEngine.Object.DontDestroyOnLoad(panelGO);
-        panelGO.AddComponent<AdminPanelBehaviour>();
-        return true;
+        try
+        {
+            harmony = new Harmony("com.puck.adminpanel");
+            harmony.PatchAll();
+            panelGO = new GameObject("AdminPanelView");
+            UnityEngine.Object.DontDestroyOnLoad(panelGO);
+            panelGO.AddComponent<AdminPanelBehaviour>();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError("[AdminPanel] OnEnable failed: " + ex.ToString());
+            throw;
+        }
     }
 
     public bool OnDisable()
@@ -773,14 +781,13 @@ public static class AdminPanel
 
     public static void Toggle()
     {
-        // Only allow opening if in a server AND local player is admin
         if (!panelVisible)
         {
             if (!IsInServer())
                 return;
+            // Check admin status for logging/gating individual commands,
+            // but don't block panel open — server-side RPCs enforce permissions.
             CheckLocalPlayerAdmin();
-            if (!localPlayerIsAdmin)
-                return;
         }
         if (panelVisible) Hide(); else Show();
     }
@@ -943,10 +950,20 @@ public static class AdminPanel
         try
         {
             var nm = Unity.Netcode.NetworkManager.Singleton;
-            if (nm == null) return false;
-            return nm.IsServer || nm.IsConnectedClient;
+            if (nm == null)
+            {
+                Debug.Log("[AdminPanel] IsInServer: NetworkManager.Singleton is null");
+                return false;
+            }
+            bool result = nm.IsServer || nm.IsConnectedClient;
+            Debug.Log("[AdminPanel] IsInServer: " + result + " (IsServer=" + nm.IsServer + " IsConnectedClient=" + nm.IsConnectedClient + ")");
+            return result;
         }
-        catch { return false; }
+        catch (Exception ex)
+        {
+            Debug.LogError("[AdminPanel] IsInServer threw: " + ex.ToString());
+            return false;
+        }
     }
 
     private static void CheckLocalPlayerAdmin()
@@ -954,31 +971,76 @@ public static class AdminPanel
         localPlayerIsAdmin = false;
         try
         {
-            if (!IsInServer()) return;
+            if (!IsInServer())
+            {
+                Debug.Log("[AdminPanel] Admin check: not in a server");
+                return;
+            }
+
+            // On a dedicated server (IsServer && !IsHost), there's no local player.
+            // The person with access to the server machine/console is inherently admin.
+            var nm = Unity.Netcode.NetworkManager.Singleton;
+            if (nm != null && nm.IsServer && !nm.IsHost)
+            {
+                localPlayerIsAdmin = true;
+                Debug.Log("[AdminPanel] Admin check: dedicated server operator — auto-authorized");
+                return;
+            }
+
+            Debug.Log("[AdminPanel] Admin check: IsServer=" + (nm != null ? nm.IsServer.ToString() : "N/A")
+                + " IsHost=" + (nm != null ? nm.IsHost.ToString() : "N/A")
+                + " IsClient=" + (nm != null ? nm.IsClient.ToString() : "N/A")
+                + " IsConnectedClient=" + (nm != null ? nm.IsConnectedClient.ToString() : "N/A"));
+
             var pm = PlayerManager.Instance;
-            if (pm == null) return;
+            if (pm == null)
+            {
+                Debug.Log("[AdminPanel] Admin check: PlayerManager.Instance is null");
+                return;
+            }
             var players = pm.GetPlayers();
-            if (players == null) return;
+            if (players == null)
+            {
+                Debug.Log("[AdminPanel] Admin check: GetPlayers() returned null");
+                return;
+            }
+
+            Debug.Log("[AdminPanel] Admin check: " + players.Count + " players in list");
             foreach (var p in players)
             {
                 if (p != null && p.IsLocalPlayer)
                 {
+                    int adminLevel = p.AdminLevel.Value;
+                    string steamId = SafeNetString(p.SteamId);
+                    Debug.Log("[AdminPanel] Admin check: found local player — AdminLevel=" + adminLevel + " SteamId=" + steamId);
+
                     // Quick check: AdminLevel > 0 means admin
-                    if (p.AdminLevel.Value > 0)
+                    if (adminLevel > 0)
                     {
                         localPlayerIsAdmin = true;
+                        Debug.Log("[AdminPanel] Admin check: authorized via AdminLevel=" + adminLevel);
                         return;
                     }
                     // Fallback: check Steam ID against admin list
-                    string steamId = SafeNetString(p.SteamId);
                     var sm = ServerManager.Instance;
                     if (sm != null && sm.AdminManager != null)
+                    {
                         localPlayerIsAdmin = sm.AdminManager.IsSteamIdAdmin(steamId);
+                        Debug.Log("[AdminPanel] Admin check: fallback admin manager result=" + localPlayerIsAdmin);
+                    }
+                    else
+                    {
+                        Debug.Log("[AdminPanel] Admin check: fallback unavailable — ServerManager=" + (sm != null ? "OK" : "null")
+                            + " AdminManager=" + (sm?.AdminManager != null ? "OK" : "null"));
+                    }
                     break;
                 }
             }
+
+            if (!localPlayerIsAdmin)
+                Debug.Log("[AdminPanel] Admin check: no local player found or not authorized");
         }
-        catch { localPlayerIsAdmin = false; }
+        catch (Exception ex) { Debug.LogError("[AdminPanel] Admin check threw: " + ex.ToString()); localPlayerIsAdmin = false; }
     }
 
     // ── SELECTION ──────────────────────────────────────────────
@@ -1165,6 +1227,14 @@ public static class AdminPanel
 
     // ── COMMAND EXECUTOR ────────────────────────────────────────
 
+    private static bool RequireAdmin()
+    {
+        CheckLocalPlayerAdmin();
+        if (!localPlayerIsAdmin)
+            StatusWarn("Admin only — you are not authorized");
+        return localPlayerIsAdmin;
+    }
+
     private static void ExecuteCommand(string rawInput)
     {
         if (string.IsNullOrWhiteSpace(rawInput)) return;
@@ -1178,6 +1248,11 @@ public static class AdminPanel
 
         try
         {
+            // Only /whoami and /muted are info — everything else requires admin
+            bool needsAdmin = cmd != "/whoami" && cmd != "/muted";
+            if (needsAdmin && !RequireAdmin())
+                return;
+
             switch (cmd)
             {
                 case "/warmup": CmdWarmup(args); break;
@@ -1603,6 +1678,7 @@ public static class AdminPanel
 
     private static void DoKick()
     {
+        if (!RequireAdmin()) return;
         ConfirmAction("kick", () =>
         {
             if (selectedPlayer == null) return;
@@ -1617,6 +1693,7 @@ public static class AdminPanel
 
     private static void DoBan()
     {
+        if (!RequireAdmin()) return;
         ConfirmAction("ban", () =>
         {
             if (selectedPlayer == null) return;
