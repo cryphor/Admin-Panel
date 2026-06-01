@@ -143,10 +143,7 @@ public static class ServerCommandHandler
         if (args.Length > 0) float.TryParse(args[0], out seconds);
         var gm = GameManager.Instance;
         gm.Server_SetGameState(phase: GamePhase.Warmup, tick: (int)seconds,
-            period: gm.GameState.Value.Period,
-            blueScore: gm.GameState.Value.BlueScore,
-            redScore: gm.GameState.Value.RedScore,
-            isOvertime: gm.GameState.Value.IsOvertime);
+            period: 0, blueScore: 0, redScore: 0, isOvertime: false);
         gm.Server_StartTicking();
     }
 
@@ -154,8 +151,7 @@ public static class ServerCommandHandler
     {
         var gm = GameManager.Instance;
         gm.Server_SetGameState(phase: GamePhase.Play, tick: 300,
-            period: gm.GameState.Value.Period,
-            blueScore: 0, redScore: 0, isOvertime: false);
+            period: 1, blueScore: 0, redScore: 0, isOvertime: false);
         gm.Server_StartTicking();
     }
 
@@ -307,23 +303,46 @@ public static class ServerCommandHandler
 
     private static void SetGoals(string[] args)
     {
-        if (args.Length < 2 || !int.TryParse(args[1], out int goals)) return;
+        if (args.Length < 2) return;
         var gm = GameManager.Instance;
         var gs = gm.GameState.Value;
         int blue = gs.BlueScore;
         int red = gs.RedScore;
-        switch (args[0].ToLowerInvariant())
+        string amount = args[1];
+        bool relative = amount.Length > 0 && (amount[0] == '+' || amount[0] == '-');
+        if (relative)
         {
-            case "blue": case "b": blue = Mathf.Max(0, goals); break;
-            case "red": case "r": red = Mathf.Max(0, goals); break;
+            // Relative: "+N" or "-N" — increment/decrement from current
+            if (int.TryParse(amount, out int delta))
+            {
+                switch (args[0].ToLowerInvariant())
+                {
+                    case "blue": case "b": blue = Mathf.Max(0, blue + delta); break;
+                    case "red": case "r": red = Mathf.Max(0, red + delta); break;
+                }
+            }
+        }
+        else if (int.TryParse(amount, out int absolute))
+        {
+            // Absolute: set to N
+            switch (args[0].ToLowerInvariant())
+            {
+                case "blue": case "b": blue = Mathf.Max(0, absolute); break;
+                case "red": case "r": red = Mathf.Max(0, absolute); break;
+            }
         }
         gm.Server_SetGameState(blueScore: blue, redScore: red);
     }
 
     private static void SetState(string[] args)
     {
-        if (args.Length < 1 || !int.TryParse(args[0], out int state)) return;
-        GameManager.Instance.Server_SetGameState(phase: (GamePhase)state);
+        if (args.Length < 1 || !int.TryParse(args[0], out int period)) return;
+        var gm = GameManager.Instance;
+        bool ot = period > 3;
+        int p = ot ? period - 3 : period; // 1→1, 2→2, 3→3, 4→1(OT), 5→2(OT)
+        gm.Server_SetGameState(phase: GamePhase.Play, tick: 300, period: Mathf.Max(1, p),
+            blueScore: null, redScore: null, isOvertime: ot);
+        gm.Server_StartTicking();
     }
 }
 public class AdminPanelBehaviour : MonoBehaviour
