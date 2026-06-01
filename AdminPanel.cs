@@ -1330,9 +1330,17 @@ public static class AdminPanel
                 return;
             }
 
-            // 1) Check AdminLevel NetworkVariable (synced from server)
-            //    The server reads admin_steam_ids.json and sets AdminLevel on each player.
-            //    This is the authoritative admin check — the server tells us who is admin.
+            // 1) Check admin_panel.json (or fallback to admin_steam_ids.json)
+            //    Format: ["steamid1", "steamid2"]
+            if (CheckAdminPanelJson(localSteamId))
+            {
+                localPlayerIsAdmin = true;
+                Debug.Log("[AdminPanel] Admin check: authorized via admin_panel.json");
+                return;
+            }
+
+            // 2) Check AdminLevel NetworkVariable (synced from server)
+            //    The server reads its own admin_steam_ids.json and sets AdminLevel on each player.
             var pm = PlayerManager.Instance;
             if (pm != null)
             {
@@ -1392,73 +1400,50 @@ public static class AdminPanel
         catch { return null; }
     }
 
-    private static List<string> s_adminFileCache;
-    private static double s_adminFileCacheTime;
+    private static string AdminPanelJsonPath
+    {
+        get
+        {
+            try { return Path.GetFullPath(Path.Combine(Application.dataPath, "..", "admin_panel.json")); }
+            catch { return null; }
+        }
+    }
 
-    private static bool CheckAdminFile(string steamId)
+    private static bool CheckAdminPanelJson(string steamId)
     {
         try
         {
-            // Refresh cache every 30s
-            if (s_adminFileCache == null || Time.unscaledTime - s_adminFileCacheTime > 30f)
+            string path = AdminPanelJsonPath;
+            if (string.IsNullOrEmpty(path)) return false;
+
+            // Try admin_panel.json first, then admin_steam_ids.json as fallback
+            if (!File.Exists(path))
             {
-                s_adminFileCache = ScanAdminFiles();
-                s_adminFileCacheTime = Time.unscaledTime;
+                string dir = Path.GetDirectoryName(path) ?? ".";
+                string alt = Path.Combine(dir, "admin_steam_ids.json");
+                if (File.Exists(alt)) path = alt;
+                else return false;
             }
-            bool found = s_adminFileCache.Contains(steamId);
-            Debug.Log("[AdminPanel] Admin file check: " + s_adminFileCache.Count + " total IDs across all Steam app folders, local in list=" + found);
+
+            string raw = File.ReadAllText(path).Trim();
+            var ids = new List<string>();
+            int start = raw.IndexOf('"');
+            while (start >= 0)
+            {
+                int end = raw.IndexOf('"', start + 1);
+                if (end < 0) break;
+                ids.Add(raw.Substring(start + 1, end - start - 1));
+                start = raw.IndexOf('"', end + 1);
+            }
+            bool found = ids.Contains(steamId);
+            Debug.Log("[AdminPanel] Admin file: " + path + " — " + ids.Count + " IDs, " + steamId + " in list=" + found);
             return found;
         }
         catch (Exception ex)
         {
-            Debug.LogWarning("[AdminPanel] Admin file check error: " + ex.Message);
+            Debug.LogWarning("[AdminPanel] Admin file error: " + ex.Message);
             return false;
         }
-    }
-
-    private static List<string> ScanAdminFiles()
-    {
-        var all = new List<string>();
-        try
-        {
-            // From the client's Puck_Data folder, go up to find Steam library root
-            // e.g. C:\Program Files (x86)\Steam\steamapps\common\Puck\Puck_Data
-            //    → C:\Program Files (x86)\Steam\steamapps\common\
-            string dataPath = Application.dataPath; // .../Puck_Data
-            if (dataPath == null) return all;
-
-            // Walk up until we find a "steamapps" parent
-            var dir = new DirectoryInfo(dataPath);
-            while (dir != null)
-            {
-                string commonPath = Path.Combine(dir.FullName, "steamapps", "common");
-                if (Directory.Exists(commonPath))
-                {
-                    Debug.Log("[AdminPanel] Admin file scan: found Steam common at " + commonPath);
-                    foreach (var appDir in Directory.GetDirectories(commonPath))
-                    {
-                        string jsonPath = Path.Combine(appDir, "admin_steam_ids.json");
-                        if (!File.Exists(jsonPath)) continue;
-                        string raw = File.ReadAllText(jsonPath).Trim();
-                        int count = 0;
-                        int start = raw.IndexOf('"');
-                        while (start >= 0)
-                        {
-                            int end = raw.IndexOf('"', start + 1);
-                            if (end < 0) break;
-                            all.Add(raw.Substring(start + 1, end - start - 1));
-                            count++;
-                            start = raw.IndexOf('"', end + 1);
-                        }
-                        Debug.Log("[AdminPanel] Admin file scan: " + jsonPath + " — " + count + " IDs");
-                    }
-                    break;
-                }
-                dir = dir.Parent;
-            }
-        }
-        catch (Exception ex) { Debug.LogWarning("[AdminPanel] Admin file scan error: " + ex.Message); }
-        return all;
     }
 
     // ── SELECTION ──────────────────────────────────────────────
