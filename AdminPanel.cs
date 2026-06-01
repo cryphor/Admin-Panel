@@ -142,16 +142,15 @@ public static class ServerCommandHandler
         float seconds = 60f;
         if (args.Length > 0) float.TryParse(args[0], out seconds);
         var gm = GameManager.Instance;
-        gm.Server_SetGameState(phase: GamePhase.Warmup, tick: (int)seconds,
-            period: 0, blueScore: 0, redScore: 0, isOvertime: false);
+        gm.Server_SetGameState(GamePhase.Warmup, (int)seconds, 1, 0, 0, false);
         gm.Server_StartTicking();
     }
 
     private static void Start(string[] args)
     {
         var gm = GameManager.Instance;
-        gm.Server_SetGameState(phase: GamePhase.Play, tick: 300,
-            period: 1, blueScore: 0, redScore: 0, isOvertime: false);
+        // Match the game's StartGame(PreGame): goes PreGame → FaceOff → Play automatically
+        gm.Server_SetGameState(GamePhase.PreGame, 10, 1, 0, 0, false);
         gm.Server_StartTicking();
     }
 
