@@ -1812,33 +1812,6 @@ public static class AdminPanel
         statusLabel.style.color = ColOrange;
     }
 
-    // ── CHAT HELPERS ────────────────────────────────────────────
-
-    /// <summary>Send an admin chat message to all players (Color overload).</summary>
-    private static void ChatAuto(string message, Color color)
-    {
-        ChatAuto(message, ColToHex(color));
-    }
-
-    /// <summary>Send an admin chat message to all players (hex string overload).</summary>
-    /// <remarks>Server-only. `Server_SendChatMessage` is an RPC that only the server can call.
-    /// On a pure client this is a no-op — the server-side ExecuteRaw handlers broadcast their own messages.</remarks>
-    private static void ChatAuto(string message, string hexColor)
-    {
-        var nm = Unity.Netcode.NetworkManager.Singleton;
-        if (nm == null || !nm.IsServer)
-        {
-            Debug.Log("[AdminPanel] ChatAuto skipped — not on server");
-            return;
-        }
-
-        var players = PlayerManager.Instance.GetPlayers();
-        ulong[] allIds = new ulong[players.Count];
-        for (int i = 0; i < players.Count; i++)
-            allIds[i] = players[i].OwnerClientId;
-        ChatManager.Instance.Server_SendChatMessage(message, hexColor, allIds);
-    }
-
     // ── PLAYER LOOKUP ───────────────────────────────────────────
 
     private static Player FindPlayerByNeedle(string needle)
@@ -1966,14 +1939,12 @@ public static class AdminPanel
     {
         float seconds = 60f;
         if (args.Length > 0 && !float.TryParse(args[0], out seconds)) seconds = 60f;
-        ChatAuto($"Warmup started ({seconds}s)", ColYellow);
         SendServerCmd("/warmup " + (int)seconds);
         StatusOk($"Warmup: {seconds}s");
     }
 
     private static void CmdStart(string[] args)
     {
-        ChatAuto("Game started!", ColGreen);
         SendServerCmd("/start");
         StatusOk("Game started");
     }
@@ -1981,14 +1952,12 @@ public static class AdminPanel
     private static void CmdPause(string[] args)
     {
         SendServerCmd("/pause");
-        ChatAuto("Game paused", ColOrange);
         StatusOk("Paused");
     }
 
     private static void CmdResume(string[] args)
     {
         SendServerCmd("/resume");
-        ChatAuto("Game resumed", ColGreen);
         StatusOk("Resumed");
     }
 
@@ -2012,14 +1981,14 @@ public static class AdminPanel
         {
             Player target = GetTargetOrSelected();
             if (target == null) { StatusWarn("Select a player first"); return; }
-            SendServerCmd("/mute " + SafeNetString(target.Username) + " permanent");
+            SendServerCmd("/mute " + SafeNetString(target.Username));
             StatusOk("Muted " + SafeNetString(target.Username));
             return;
         }
-        string needle = args[0];
-        string duration = args.Length > 1 ? args[1] : "permanent";
-        SendServerCmd("/mute " + needle + " " + duration);
-        StatusOk("Muted " + needle);
+        Player needleTarget = GetTargetOrSelected(args);
+        if (needleTarget == null) { StatusWarn("Player not found: " + args[0]); return; }
+        SendServerCmd("/mute " + SafeNetString(needleTarget.Username));
+        StatusOk("Muted " + SafeNetString(needleTarget.Username));
     }
 
     private static void CmdUnmute(string[] args)
@@ -2032,8 +2001,10 @@ public static class AdminPanel
             StatusOk("Unmuted " + SafeNetString(target.Username));
             return;
         }
-        SendServerCmd("/unmute " + args[0]);
-        StatusOk("Unmuted " + args[0]);
+        Player needleTarget = GetTargetOrSelected(args);
+        if (needleTarget == null) { StatusWarn("Player not found: " + args[0]); return; }
+        SendServerCmd("/unmute " + SafeNetString(needleTarget.Username));
+        StatusOk("Unmuted " + SafeNetString(needleTarget.Username));
     }
 
     private static void CmdMuted(string[] args)
@@ -2043,8 +2014,6 @@ public static class AdminPanel
         if (muted.Count == 0) { StatusOk("No muted players"); return; }
         string list = string.Join(", ", muted.Select(p => SafeNetString(p.Username)));
         StatusOk("Muted: " + list);
-        ChatAuto(
-            "Muted players: " + list, ColToHex(ColOrange));
     }
 
     // ── WHOAMI ──────────────────────────────────────────────────
@@ -2069,7 +2038,6 @@ public static class AdminPanel
         var gs = target.GameState.Value;
         string info = $"User: {SafeNetString(target.Username)} | Steam: {SafeNetString(target.SteamId)} | Team: {gs.Team} | Role: {gs.Role} | AdminLvl: {target.AdminLevel.Value} | Muted: {target.IsMuted.Value}";
         StatusOk(info);
-        ChatAuto(info, ColToHex(ColCyan));
     }
 
     // ── TEAM MANAGEMENT ─────────────────────────────────────────
@@ -2172,15 +2140,13 @@ public static class AdminPanel
     private static void CmdFreezeAll(string[] args)
     {
         SendServerCmd("/freezeall");
-        ChatAuto("All players frozen", ColToHex(ColCyan));
-        StatusOk("Froze all");
+        StatusOk("Freeze all sent to server");
     }
 
     private static void CmdUnfreezeAll(string[] args)
     {
         SendServerCmd("/unfreezeall");
-        ChatAuto("All players unfrozen", ColToHex(ColGreen));
-        StatusOk("Unfroze all");
+        StatusOk("Unfreeze all sent to server");
     }
 
     // ── KICK / BAN ──────────────────────────────────────────────
