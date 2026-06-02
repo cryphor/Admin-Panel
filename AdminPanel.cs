@@ -4,6 +4,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -59,16 +60,35 @@ public class PluginMain : IPuckPlugin
 /// </summary>
 public static class ServerCommandHandler
 {
+    private static HashSet<string> s_serverAdminIds = new HashSet<string>();
+    private static FileSystemWatcher s_adminFileWatcher;
+
     public static void Register()
     {
         try
         {
             var nm = Unity.Netcode.NetworkManager.Singleton;
             if (nm == null || !nm.IsServer) return;
+
             nm.CustomMessagingManager.RegisterNamedMessageHandler("AdminPanelCmd", OnNamedMessage);
-            Debug.Log("[AdminPanel] Server command handler registered");
+            nm.CustomMessagingManager.RegisterNamedMessageHandler("AdminPanel_Check", OnAdminCheckMessage);
+
+            // Dedicated server only: load admin_steam_ids.json from the server's working directory.
+            // Listen servers use the game's built-in AdminManager (already loaded by the game).
+            if (!nm.IsHost)
+            {
+                LoadAdminIds();
+                Debug.Log("[AdminPanel] Server command handler registered (dedicated)");
+            }
+            else
+            {
+                Debug.Log("[AdminPanel] Server command handler registered (listen server — using game's built-in AdminManager)");
+            }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Debug.LogError("[AdminPanel] Server registration failed: " + ex.Message);
+        }
     }
 
     public static void Unregister()
@@ -77,9 +97,158 @@ public static class ServerCommandHandler
         {
             var nm = Unity.Netcode.NetworkManager.Singleton;
             if (nm != null && nm.CustomMessagingManager != null)
+            {
                 nm.CustomMessagingManager.UnregisterNamedMessageHandler("AdminPanelCmd");
+                nm.CustomMessagingManager.UnregisterNamedMessageHandler("AdminPanel_Check");
+            }
         }
         catch { }
+        if (s_adminFileWatcher != null)
+        {
+            s_adminFileWatcher.Dispose();
+            s_adminFileWatcher = null;
+        }
+    }
+
+    /// <summary>Path to admin_steam_ids.json in the server's working directory.</summary>
+    /// <remarks>SERVER ONLY. Guarded by Register() and by LoadAdminIds() itself.</remarks>
+    private static string AdminIdsPath
+    {
+        get
+        {
+            try { return Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "admin_steam_ids.json")); }
+            catch { return Path.GetFullPath("./admin_steam_ids.json"); }
+        }
+    }
+
+    /// <summary>Load (or create) admin_steam_ids.json from the server's working directory.</summary>
+    /// <remarks>SERVER ONLY. Has a double guard: Register() checks IsServer before calling,
+    /// AND this method checks IsServer itself. File I/O never happens on a client.</remarks>
+    private static void LoadAdminIds()
+    {
+        // Double guard: this should never be reachable from a client
+        var nm = Unity.Netcode.NetworkManager.Singleton;
+        if (nm == null || !nm.IsServer)
+        {
+            Debug.LogError("[CRITICAL] LoadAdminIds() called on non-server — this indicates a bug");
+            return;
+        }
+        if (nm.IsHost)
+        {
+            Debug.LogWarning("[CRITICAL] LoadAdminIds() called on listen server — this indicates a bug, skipping");
+            return;
+        }
+
+        try
+        {
+            string path = AdminIdsPath;
+            if (!File.Exists(path))
+            {
+                File.WriteAllText(path, "[]", Encoding.UTF8);
+                Debug.Log("[SERVER] Created admin_steam_ids.json at " + path);
+            }
+            string json = File.ReadAllText(path, Encoding.UTF8);
+            s_serverAdminIds = ParseJsonStringArray(json);
+            Debug.Log("[SERVER] Loaded " + s_serverAdminIds.Count + " admin IDs from " + path);
+
+            // Watch for file changes
+            if (s_adminFileWatcher != null) s_adminFileWatcher.Dispose();
+            string dir = Path.GetDirectoryName(path);
+            string file = Path.GetFileName(path);
+            if (dir != null && file != null)
+            {
+                s_adminFileWatcher = new FileSystemWatcher(dir, file);
+                s_adminFileWatcher.NotifyFilter = NotifyFilters.LastWrite;
+                s_adminFileWatcher.EnableRaisingEvents = true;
+                s_adminFileWatcher.Changed += (_, _) =>
+                {
+                    try { s_serverAdminIds = ParseJsonStringArray(File.ReadAllText(path, Encoding.UTF8)); }
+                    catch { }
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError("[SERVER] Failed to load admin_steam_ids.json: " + ex.Message);
+            s_serverAdminIds = new HashSet<string>();
+        }
+    }
+
+    /// <summary>Handle admin check request from a client.</summary>
+    private static void OnAdminCheckMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        try
+        {
+            reader.ReadValueSafe(out int length);
+            byte[] data = new byte[length];
+            reader.ReadBytesSafe(ref data, length);
+            string steamId = Encoding.UTF8.GetString(data);
+
+            bool isAdmin = s_serverAdminIds.Contains(steamId);
+            Debug.Log("[AdminPanel] Admin check for SteamId=" + steamId + " from client=" + senderClientId + ": " + (isAdmin ? "authorized" : "denied"));
+
+            byte[] resp = Encoding.UTF8.GetBytes(isAdmin ? "1" : "0");
+            using (var writer = new FastBufferWriter(resp.Length + 4, Unity.Collections.Allocator.Temp))
+            {
+                writer.WriteValueSafe(resp.Length);
+                writer.WriteBytesSafe(resp);
+                NetworkManager.Singleton.CustomMessagingManager.SendNamedMessage("AdminPanel_Result", new ulong[] { senderClientId }, writer);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError("[AdminPanel] Admin check error: " + ex.Message);
+        }
+    }
+
+    /// <summary>Parse a JSON string array: ["id1","id2"] into a HashSet.</summary>
+    private static HashSet<string> ParseJsonStringArray(string json)
+    {
+        var set = new HashSet<string>();
+        int start = json.IndexOf('"');
+        while (start >= 0)
+        {
+            int end = json.IndexOf('"', start + 1);
+            if (end < 0) break;
+            set.Add(json.Substring(start + 1, end - start - 1));
+            start = json.IndexOf('"', end + 1);
+        }
+        return set;
+    }
+
+    /// <summary>Check if a Steam ID is admin on this server (listen-server host path).
+    /// For dedicated servers: checks the file-loaded in-memory s_serverAdminIds set.
+    /// For listen servers: checks the game's built-in AdminManager (which already loaded admin_steam_ids.json).</summary>
+    internal static bool? CheckAdminLocal(string steamId)
+    {
+        if (string.IsNullOrEmpty(steamId)) return false;
+
+        if (s_serverAdminIds.Count > 0)
+        {
+            // Dedicated server: use the in-memory set loaded from admin_steam_ids.json
+            bool found = s_serverAdminIds.Contains(steamId);
+            Debug.Log("[AdminPanel] CheckAdminLocal (in-memory set): SteamId=" + steamId + " result=" + found);
+            return found;
+        }
+
+        // Listen server: use the game's built-in AdminManager (reads its own admin_steam_ids.json)
+        try
+        {
+            var am = ServerManager.Instance?.AdminManager;
+            if (am != null)
+            {
+                bool isAdmin = am.IsSteamIdAdmin(steamId);
+                Debug.Log("[AdminPanel] CheckAdminLocal (AdminManager): SteamId=" + steamId + " result=" + isAdmin);
+                return isAdmin;
+            }
+            Debug.LogWarning("[AdminPanel] CheckAdminLocal: AdminManager unavailable");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError("[AdminPanel] CheckAdminLocal: AdminManager error: " + ex.Message);
+            return false;
+        }
     }
 
     private static void OnNamedMessage(ulong senderClientId, Unity.Netcode.FastBufferReader reader)
@@ -387,6 +556,9 @@ public static class AdminPanel
     private static bool isDragging = false;
     private static Vector2 dragOffset;
     private static bool localPlayerIsAdmin = false;
+    private static bool s_adminCheckRequested = false;
+    private static bool? s_adminCheckResponse = null;
+    private static bool s_adminResultHandlerRegistered = false;
     private static readonly HashSet<ulong> pausedPlayers = new HashSet<ulong>();
 
     private static readonly Color ColBg = new Color(0.10f, 0.10f, 0.13f, 0.97f);
@@ -418,10 +590,12 @@ public static class AdminPanel
     {
         BuildPanel(uiRoot);
         Hide();
+        RegisterAdminCheckClientHandler();
     }
 
     public static void Destroy()
     {
+        UnregisterAdminCheckClientHandler();
         if (panel != null && panel.parent != null)
             panel.parent.Remove(panel);
         panel = null;
@@ -1094,6 +1268,9 @@ public static class AdminPanel
         {
             if (!IsInServer())
                 return;
+            // Reset admin check state so we re-request from server
+            s_adminCheckRequested = false;
+            s_adminCheckResponse = null;
             // Check immediately, and retry once after a short delay for server sync
             CheckLocalPlayerAdmin();
             if (!localPlayerIsAdmin)
@@ -1330,15 +1507,6 @@ public static class AdminPanel
                 return;
             }
 
-            // 1) Check admin_panel.json (or fallback to admin_steam_ids.json)
-            //    Format: ["steamid1", "steamid2"]
-            if (CheckAdminPanelJson(localSteamId))
-            {
-                localPlayerIsAdmin = true;
-                Debug.Log("[AdminPanel] Admin check: authorized via admin_panel.json");
-                return;
-            }
-
             // 2) Check AdminLevel NetworkVariable (synced from server)
             //    The server reads its own admin_steam_ids.json and sets AdminLevel on each player.
             var pm = PlayerManager.Instance;
@@ -1365,23 +1533,106 @@ public static class AdminPanel
                 }
             }
 
-            // 3) Check ServerManager.AdminManager
-            var sm = ServerManager.Instance;
-            if (sm != null && sm.AdminManager != null)
+            // 3) Named message check: ask the server, trust its response.
+            //    The server reads its own admin_steam_ids.json from its working directory.
+            if (s_adminCheckResponse.HasValue)
             {
-                localPlayerIsAdmin = sm.AdminManager.IsSteamIdAdmin(localSteamId);
-                Debug.Log("[AdminPanel] Admin check: AdminManager result=" + localPlayerIsAdmin);
+                localPlayerIsAdmin = s_adminCheckResponse.Value;
+                Debug.Log("[AdminPanel] Admin check: named message result=" + localPlayerIsAdmin);
                 if (localPlayerIsAdmin) return;
             }
-            else
+            else if (!s_adminCheckRequested)
             {
-                Debug.Log("[AdminPanel] Admin check: AdminManager unavailable — ServerManager=" + (sm != null ? "OK" : "null")
-                    + " AdminManager=" + (sm?.AdminManager != null ? "OK" : "null"));
+                s_adminCheckRequested = true;
+                SendAdminCheckRequest(localSteamId);
+                Debug.Log("[AdminPanel] Admin check: sent named message request for SteamId=" + localSteamId);
             }
 
-            Debug.Log("[AdminPanel] Admin check: not authorized for SteamId=" + localSteamId);
+            Debug.Log("[AdminPanel] Admin check: not authorized for SteamId=" + localSteamId + " (pending=" + s_adminCheckRequested + " response=" + s_adminCheckResponse + ")");
         }
         catch (Exception ex) { Debug.LogError("[AdminPanel] Admin check threw: " + ex.ToString()); localPlayerIsAdmin = false; }
+    }
+
+    // ── NAMED MESSAGE ADMIN CHECK (CLIENT-SIDE) ──────────────
+
+    /// <summary>Register the client-side handler for AdminPanel_Result from the server.</summary>
+    private static void RegisterAdminCheckClientHandler()
+    {
+        if (s_adminResultHandlerRegistered) return;
+        try
+        {
+            var nm = Unity.Netcode.NetworkManager.Singleton;
+            if (nm == null || nm.CustomMessagingManager == null) return;
+            nm.CustomMessagingManager.RegisterNamedMessageHandler("AdminPanel_Result", OnAdminCheckResult);
+            s_adminResultHandlerRegistered = true;
+            Debug.Log("[AdminPanel] Client admin check handler registered");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("[AdminPanel] Failed to register admin check handler: " + ex.Message);
+        }
+    }
+
+    /// <summary>Unregister the client-side handler.</summary>
+    private static void UnregisterAdminCheckClientHandler()
+    {
+        if (!s_adminResultHandlerRegistered) return;
+        try
+        {
+            var nm = Unity.Netcode.NetworkManager.Singleton;
+            if (nm != null && nm.CustomMessagingManager != null)
+                nm.CustomMessagingManager.UnregisterNamedMessageHandler("AdminPanel_Result");
+            s_adminResultHandlerRegistered = false;
+        }
+        catch { }
+    }
+
+    /// <summary>Send a named message to the server asking if this Steam ID is an admin.</summary>
+    private static void SendAdminCheckRequest(string steamId)
+    {
+        try
+        {
+            var nm = Unity.Netcode.NetworkManager.Singleton;
+            if (nm == null || !nm.IsConnectedClient) return;
+
+            // Listen server: check directly
+            if (nm.IsServer && nm.IsHost)
+            {
+                s_adminCheckResponse = ServerCommandHandler.CheckAdminLocal(steamId);
+                Debug.Log("[AdminPanel] Admin check (local server): " + (s_adminCheckResponse.Value ? "authorized" : "denied"));
+                return;
+            }
+
+            byte[] data = Encoding.UTF8.GetBytes(steamId);
+            using (var writer = new FastBufferWriter(data.Length + 4, Unity.Collections.Allocator.Temp))
+            {
+                writer.WriteValueSafe(data.Length);
+                writer.WriteBytesSafe(data);
+                nm.CustomMessagingManager.SendNamedMessage("AdminPanel_Check", new ulong[] { NetworkManager.ServerClientId }, writer);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError("[AdminPanel] SendAdminCheckRequest error: " + ex.Message);
+        }
+    }
+
+    /// <summary>Handle the server's admin check response.</summary>
+    private static void OnAdminCheckResult(ulong senderClientId, FastBufferReader reader)
+    {
+        try
+        {
+            reader.ReadValueSafe(out int length);
+            byte[] data = new byte[length];
+            reader.ReadBytesSafe(ref data, length);
+            string result = Encoding.UTF8.GetString(data);
+            s_adminCheckResponse = result == "1";
+            Debug.Log("[AdminPanel] Admin check result from server: " + (s_adminCheckResponse.Value ? "authorized" : "denied"));
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError("[AdminPanel] Admin check result error: " + ex.Message);
+        }
     }
 
     private static string GetLocalPlayerSteamId()
@@ -1398,52 +1649,6 @@ public static class AdminPanel
             return null;
         }
         catch { return null; }
-    }
-
-    private static string AdminPanelJsonPath
-    {
-        get
-        {
-            try { return Path.GetFullPath(Path.Combine(Application.dataPath, "..", "admin_panel.json")); }
-            catch { return null; }
-        }
-    }
-
-    private static bool CheckAdminPanelJson(string steamId)
-    {
-        try
-        {
-            string path = AdminPanelJsonPath;
-            if (string.IsNullOrEmpty(path)) return false;
-
-            // Try admin_panel.json first, then admin_steam_ids.json as fallback
-            if (!File.Exists(path))
-            {
-                string dir = Path.GetDirectoryName(path) ?? ".";
-                string alt = Path.Combine(dir, "admin_steam_ids.json");
-                if (File.Exists(alt)) path = alt;
-                else return false;
-            }
-
-            string raw = File.ReadAllText(path).Trim();
-            var ids = new List<string>();
-            int start = raw.IndexOf('"');
-            while (start >= 0)
-            {
-                int end = raw.IndexOf('"', start + 1);
-                if (end < 0) break;
-                ids.Add(raw.Substring(start + 1, end - start - 1));
-                start = raw.IndexOf('"', end + 1);
-            }
-            bool found = ids.Contains(steamId);
-            Debug.Log("[AdminPanel] Admin file: " + path + " — " + ids.Count + " IDs, " + steamId + " in list=" + found);
-            return found;
-        }
-        catch (Exception ex)
-        {
-            Debug.LogWarning("[AdminPanel] Admin file error: " + ex.Message);
-            return false;
-        }
     }
 
     // ── SELECTION ──────────────────────────────────────────────
