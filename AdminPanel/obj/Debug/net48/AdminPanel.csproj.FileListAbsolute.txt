@@ -3,3 +3,4 @@ C:\Users\w4ua\Documents\Code\Puck Mods\Admin Panel\AdminPanel\obj\Debug\net48\Ad
 C:\Users\w4ua\Documents\Code\Puck Mods\Admin Panel\AdminPanel\obj\Debug\net48\AdminPanel.AssemblyInfoInputs.cache
 C:\Users\w4ua\Documents\Code\Puck Mods\Admin Panel\AdminPanel\obj\Debug\net48\AdminPanel.AssemblyInfo.cs
 C:\Users\w4ua\Documents\Code\Puck Mods\Admin Panel\AdminPanel\obj\Debug\net48\AdminPanel.csproj.CoreCompileInputs.cache
+C:\Users\w4ua\Documents\Code\Puck Mods\Admin Panel\AdminPanel\obj\Debug\net48\AdminPanel.sourcelink.json
