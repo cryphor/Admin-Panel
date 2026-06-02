@@ -295,6 +295,9 @@ public static class ServerCommandHandler
                 case "/jump": Jump(args); break;
                 case "/mute": Mute(args); break;
                 case "/unmute": Unmute(args); break;
+                case "/kick": Kick(args); break;
+                case "/ban": Ban(args); break;
+                case "/kicksteamid": KickBySteamId(args); break;
                 case "/settime": SetTime(args); break;
                 case "/setgoals": SetGoals(args); break;
                 case "/setstate": SetState(args); break;
@@ -435,9 +438,9 @@ public static class ServerCommandHandler
         if (target?.PlayerBody?.Rigidbody == null) return;
         var rng = new System.Random();
         target.PlayerBody.Rigidbody.AddForce(new Vector3(
-            (float)(rng.NextDouble() * 2 - 1) * 15f,
-            (float)(rng.NextDouble()) * 10f + 5f,
-            (float)(rng.NextDouble() * 2 - 1) * 15f
+            (float)(rng.NextDouble() * 2 - 1) * 80f,
+            (float)(rng.NextDouble()) * 40f + 15f,
+            (float)(rng.NextDouble() * 2 - 1) * 80f
         ), UnityEngine.ForceMode.Impulse);
     }
 
@@ -461,6 +464,27 @@ public static class ServerCommandHandler
         if (args.Length < 1) return;
         var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
         if (target != null) target.IsMuted.Value = false;
+    }
+
+    private static void Kick(string[] args)
+    {
+        if (args.Length < 1) return;
+        var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
+        if (target != null) ServerManager.Instance.Server_KickPlayer(target);
+    }
+
+    private static void Ban(string[] args)
+    {
+        if (args.Length < 1) return;
+        var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
+        if (target != null) ServerManager.Instance.Server_BanPlayer(target);
+    }
+
+    private static void KickBySteamId(string[] args)
+    {
+        if (args.Length < 1) return;
+        var target = PlayerManager.Instance.GetPlayerBySteamId(args[0]);
+        if (target != null) ServerManager.Instance.Server_KickPlayer(target);
     }
 
     private static void SetTime(string[] args)
@@ -1797,8 +1821,17 @@ public static class AdminPanel
     }
 
     /// <summary>Send an admin chat message to all players (hex string overload).</summary>
+    /// <remarks>Server-only. `Server_SendChatMessage` is an RPC that only the server can call.
+    /// On a pure client this is a no-op — the server-side ExecuteRaw handlers broadcast their own messages.</remarks>
     private static void ChatAuto(string message, string hexColor)
     {
+        var nm = Unity.Netcode.NetworkManager.Singleton;
+        if (nm == null || !nm.IsServer)
+        {
+            Debug.Log("[AdminPanel] ChatAuto skipped — not on server");
+            return;
+        }
+
         var players = PlayerManager.Instance.GetPlayers();
         ulong[] allIds = new ulong[players.Count];
         for (int i = 0; i < players.Count; i++)
@@ -1909,7 +1942,7 @@ public static class AdminPanel
                 case "/pauseall": CmdPauseAll(args); break;
                 case "/resumeall": CmdResumeAll(args); break;
                 case "/kick": CmdKick(args); break;
-                case "/kicksteamid": CmdKickSteamId(args); break;
+                case "/kicksteamid": CmdKickBySteamId(args); break;
                 case "/slap": CmdSlap(args); break;
                 case "/jump": CmdJump(args); break;
                 case "/settime": CmdSetTime(args); break;
@@ -1975,7 +2008,14 @@ public static class AdminPanel
 
     private static void CmdMute(string[] args)
     {
-        if (args.Length < 1) { StatusWarn("Usage: /mute <player> [duration]"); return; }
+        if (args.Length < 1)
+        {
+            Player target = GetTargetOrSelected();
+            if (target == null) { StatusWarn("Select a player first"); return; }
+            SendServerCmd("/mute " + SafeNetString(target.Username) + " permanent");
+            StatusOk("Muted " + SafeNetString(target.Username));
+            return;
+        }
         string needle = args[0];
         string duration = args.Length > 1 ? args[1] : "permanent";
         SendServerCmd("/mute " + needle + " " + duration);
@@ -1984,7 +2024,14 @@ public static class AdminPanel
 
     private static void CmdUnmute(string[] args)
     {
-        if (args.Length < 1) { StatusWarn("Usage: /unmute <player>"); return; }
+        if (args.Length < 1)
+        {
+            Player target = GetTargetOrSelected();
+            if (target == null) { StatusWarn("Select a player first"); return; }
+            SendServerCmd("/unmute " + SafeNetString(target.Username));
+            StatusOk("Unmuted " + SafeNetString(target.Username));
+            return;
+        }
         SendServerCmd("/unmute " + args[0]);
         StatusOk("Unmuted " + args[0]);
     }
@@ -2029,15 +2076,47 @@ public static class AdminPanel
 
     private static void CmdChangeTeam(string[] args)
     {
-        if (args.Length < 2) { StatusWarn("Usage: /changeteam <player> <blue|red|spectator>"); return; }
-        SendServerCmd("/changeteam " + args[0] + " " + args[1]);
+        if (args.Length < 1) { StatusWarn("Usage: /changeteam <player|blue|red|spectator> [blue|red|spectator]"); return; }
+        if (args.Length < 2)
+        {
+            Player target = GetTargetOrSelected();
+            if (target == null) { StatusWarn("Select a player first"); return; }
+            SendServerCmd("/changeteam " + SafeNetString(target.Username) + " " + args[0]);
+        }
+        else
+        {
+            SendServerCmd("/changeteam " + args[0] + " " + args[1]);
+        }
         StatusOk("Team change sent to server");
     }
 
     private static void CmdSwap(string[] args)
     {
-        if (args.Length < 2) { StatusWarn("Usage: /swap <player1> <player2>"); return; }
-        SendServerCmd("/swap " + args[0] + " " + args[1]);
+        if (args.Length < 2)
+        {
+            if (args.Length == 1)
+            {
+                // "/swap <player>" — swap the selected player with another
+                Player target = GetTargetOrSelected(args);
+                if (target == null) { StatusWarn("Select a player or specify two"); return; }
+                if (selectedPlayer == null || selectedPlayer == target) { StatusWarn("Select a different player to swap with"); return; }
+                SendServerCmd("/swap " + SafeNetString(target.Username) + " " + SafeNetString(selectedPlayer.Username));
+            }
+            else
+            {
+                // "/swap" with no args
+                if (selectedPlayer == null) { StatusWarn("Select a player or specify two"); return; }
+                // Find any player on the opposite team to swap with
+                var allPlayers = PlayerManager.Instance.GetPlayers();
+                var other = allPlayers.FirstOrDefault(p => p != selectedPlayer && p.GameState.Value.Team != selectedPlayer.GameState.Value.Team);
+                if (other == null) { StatusWarn("No opposing player found to swap with"); return; }
+                SendServerCmd("/swap " + SafeNetString(selectedPlayer.Username) + " " + SafeNetString(other.Username));
+            }
+        }
+        else
+        {
+            SendServerCmd("/swap " + args[0] + " " + args[1]);
+        }
         StatusOk("Swap sent to server");
     }
 
@@ -2114,7 +2193,7 @@ public static class AdminPanel
         StatusOk("Kick sent to server for " + SafeNetString(target.Username));
     }
 
-    private static void CmdKickSteamId(string[] args)
+    private static void CmdKickBySteamId(string[] args)
     {
         if (args.Length < 1) { StatusWarn("Usage: /kicksteamid <steamid>"); return; }
         string steamId = args[0];
@@ -2219,6 +2298,11 @@ public static class AdminPanel
             var p = FindPlayerByNeedle(args[0]);
             if (p != null) return p;
         }
+        return selectedPlayer;
+    }
+
+    private static Player GetTargetOrSelected()
+    {
         return selectedPlayer;
     }
 
