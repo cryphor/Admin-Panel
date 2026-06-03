@@ -731,7 +731,7 @@ public static class AdminPanel
         var headerSpacer = new VisualElement();
         headerSpacer.style.flexGrow = 1;
 
-        var hintLabel = new Label("N");
+        var hintLabel = new Label("X");
         hintLabel.style.color = ColTextMuted;
         hintLabel.style.fontSize = 10;
         hintLabel.style.marginRight = 8;
