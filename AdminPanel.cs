@@ -548,6 +548,11 @@ public class AdminPanelBehaviour : MonoBehaviour
     {
         yield return null;
         yield return null;
+        // Register named-message handler early so the server can respond to
+        // admin checks even if the UI panel hasn't been created yet
+        // (relevant when isClientRequired=false and the UIDocument may not
+        //  be the in-game document at startup).
+        AdminPanel.RegisterAdminCheckClientHandler();
         if (UIManager.Instance != null && UIManager.Instance.UIDocument != null)
             AdminPanel.Create(UIManager.Instance.UIDocument.rootVisualElement);
     }
@@ -627,6 +632,14 @@ public static class AdminPanel
 
     public static void Tick()
     {
+        // Named-message handler must register against the active
+        // NetworkManager.  At plugin-load time (game start) the
+        // manager doesn't exist yet — retry every frame until it
+        // sticks.  Do this BEFORE the null-panel guard so it works
+        // even when the UI panel hasn't been created yet.
+        if (!s_adminResultHandlerRegistered)
+            RegisterAdminCheckClientHandler();
+
         if (panel == null) return;
 
         if (Keyboard.current != null && Keyboard.current.xKey.wasPressedThisFrame && !IsTyping())
@@ -1309,27 +1322,67 @@ public static class AdminPanel
 
     private static System.Collections.IEnumerator DelayedAdminCheck()
     {
-        yield return new WaitForSeconds(0.5f);
-        CheckLocalPlayerAdmin();
-        if (localPlayerIsAdmin)
+        // Retry every 0.5s for up to 5s — the named-message response
+        // from the server is async and may take longer than one frame.
+        float timeout = 5f;
+        for (float t = 0; t < timeout; t += 0.5f)
         {
-            Debug.Log("[AdminPanel] Admin authorized on retry");
-            Show();
+            yield return new WaitForSeconds(0.5f);
+            CheckLocalPlayerAdmin();
+            if (localPlayerIsAdmin)
+            {
+                Debug.Log("[AdminPanel] Admin authorized on retry");
+                Show();
+                yield break;
+            }
         }
-        else
-        {
-            StatusWarn("You are not in the admin list");
-            Debug.Log("[AdminPanel] Panel open blocked after retry — localPlayerIsAdmin=" + localPlayerIsAdmin);
-        }
+        StatusWarn("You are not in the admin list");
+        Debug.Log("[AdminPanel] Panel open blocked after retry — localPlayerIsAdmin=" + localPlayerIsAdmin);
     }
 
     public static void Show()
     {
-        if (panel == null) return;
+        // If the panel was never built (e.g. UIDocument wasn't ready at startup
+        // when isClientRequired=false), build it now against the active UIDocument.
+        if (panel == null)
+        {
+            var uiDoc = UIManager.Instance?.UIDocument;
+            if (uiDoc == null) return;
+            AdminPanel.Create(uiDoc.rootVisualElement);
+            // Create calls Hide() internally, so we continue to show it below
+        }
+
+        // Re-attach to the current UIDocument root in case the scene changed
+        // (main menu -> in-game transition detaches the old panel element).
+        EnsureAttachedToActiveRoot();
+
         panel.style.display = DisplayStyle.Flex;
         panelVisible = true;
         panel.BringToFront();
         RefreshPlayerList();
+    }
+
+    /// <summary>Ensure the panel's VisualElement is parented to the active UIDocument root.
+    /// Scene transitions (main menu → game) can detach it.</summary>
+    private static void EnsureAttachedToActiveRoot()
+    {
+        if (panel == null) return;
+        try
+        {
+            var currentRoot = UIManager.Instance?.UIDocument?.rootVisualElement;
+            if (currentRoot == null) return;
+            if (panel.parent != currentRoot)
+            {
+                // Detach from old parent if any
+                if (panel.parent != null)
+                    panel.parent.Remove(panel);
+                currentRoot.Add(panel);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("[AdminPanel] Re-attach failed: " + ex.Message);
+        }
     }
 
     public static void Hide()
@@ -1508,6 +1561,14 @@ public static class AdminPanel
                 return;
             }
 
+            // Ensure named-message handler is registered against the CURRENT
+            // NetworkManager.  At mod-load time (game start) NM is null, and
+            // when isClientRequired=false the plugin never re-initialises on
+            // connection, so the stale flag would prevent registration on the
+            // live manager.  Calling it here guarantees it's wired up before
+            // we send any request.
+            RegisterAdminCheckClientHandler();
+
             // On a dedicated server (IsServer && !IsHost), there's no local player.
             // The person with access to the server machine/console is inherently admin.
             var nm = Unity.Netcode.NetworkManager.Singleton;
@@ -1580,16 +1641,18 @@ public static class AdminPanel
     // ── NAMED MESSAGE ADMIN CHECK (CLIENT-SIDE) ──────────────
 
     /// <summary>Register the client-side handler for AdminPanel_Result from the server.</summary>
-    private static void RegisterAdminCheckClientHandler()
+    internal static void RegisterAdminCheckClientHandler()
     {
-        if (s_adminResultHandlerRegistered) return;
         try
         {
             var nm = Unity.Netcode.NetworkManager.Singleton;
             if (nm == null || nm.CustomMessagingManager == null) return;
             nm.CustomMessagingManager.RegisterNamedMessageHandler("AdminPanel_Result", OnAdminCheckResult);
-            s_adminResultHandlerRegistered = true;
-            Debug.Log("[AdminPanel] Client admin check handler registered");
+            if (!s_adminResultHandlerRegistered)
+            {
+                s_adminResultHandlerRegistered = true;
+                Debug.Log("[AdminPanel] Client admin check handler registered");
+            }
         }
         catch (Exception ex)
         {
@@ -1652,6 +1715,14 @@ public static class AdminPanel
             string result = Encoding.UTF8.GetString(data);
             s_adminCheckResponse = result == "1";
             Debug.Log("[AdminPanel] Admin check result from server: " + (s_adminCheckResponse.Value ? "authorized" : "denied"));
+
+            // Auto-open the panel when the async response arrives,
+            // even if DelayedAdminCheck() has already timed out.
+            if (s_adminCheckResponse.Value)
+            {
+                localPlayerIsAdmin = true;
+                Show();
+            }
         }
         catch (Exception ex)
         {
