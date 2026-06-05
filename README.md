@@ -93,7 +93,6 @@ Bans are available via the **Players** tab — select a player and click **Ban**
 - **Refresh** — re-scan connected players
 - **Sel** button on each row — select that player for targeted commands
 - **Bottom bar** — enter a Steam ID manually and Kick/Ban by ID
-- ★ next to player name = admin
 
 ### Commands Tab
 - **Command input** — type `/command args` and press Enter
