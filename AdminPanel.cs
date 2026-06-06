@@ -300,6 +300,7 @@ public static class ServerCommandHandler
                 case "/kicksteamid": KickBySteamId(args); break;
                 case "/settime": SetTime(args); break;
                 case "/setgoals": SetGoals(args); break;
+                case "/say": Say(args); break;
                 case "/setstate": SetState(args); break;
             }
         }
@@ -524,6 +525,16 @@ public static class ServerCommandHandler
             }
         }
         gm.Server_SetGameState(blueScore: blue, redScore: red);
+    }
+
+    private static void Say(string[] args)
+    {
+        string msg = string.Join(" ", args);
+        if (string.IsNullOrEmpty(msg)) return;
+        var cm = ChatManager.Instance;
+        if (cm == null) return;
+        cm.Server_BroadcastChatMessage(msg, "#ffaa44");
+        Debug.Log("[AdminPanel] Broadcast: " + msg);
     }
 
     private static void SetState(string[] args)
@@ -1090,12 +1101,15 @@ public static class AdminPanel
         infoRow1.Add(MakeCmdButton("Freeze Puck", ColCyan, () => ExecuteCommand("/freeze puck")));
         infoRow1.Add(MakeCmdButton("Unfreeze Puck", ColGreen, () => ExecuteCommand("/unfreeze puck")));
         cmdGrid.Add(infoRow1);
+        var infoRow2 = new VisualElement(); infoRow2.style.flexDirection = FlexDirection.Row; infoRow2.style.marginBottom = 3;
+        infoRow2.Add(MakeCmdButton("Say", ColYellow, () => ExecuteCommand("/say Hello!")));
+        cmdGrid.Add(infoRow2);
 
         // Help text
         var helpLabel = new Label(
             "Commands: /warmup [s] /start /pause /resume /mute <p> [dur] /unmute <p> /muted /whoami [p] " +
             "/changeteam <p> <team> /swap <p1> <p2> /freeze <p|puck> /unfreeze <p|puck> /freezeall /unfreezeall " +
-            "/pauseall /resumeall /kick <p> /kicksteamid <id> /slap <p> /jump <p> /settime <s> /setgoals <team> <n> /setstate <n>"
+            "/pauseall /resumeall /kick <p> /kicksteamid <id> /slap <p> /jump <p> /say <msg> /settime <s> /setgoals <team> <n> /setstate <n>"
         );
         helpLabel.style.color = ColTextMuted;
         helpLabel.style.fontSize = 9;
@@ -1995,6 +2009,7 @@ public static class AdminPanel
                 case "/kicksteamid": CmdKickBySteamId(args); break;
                 case "/slap": CmdSlap(args); break;
                 case "/jump": CmdJump(args); break;
+                case "/say": CmdSay(args); break;
                 case "/settime": CmdSetTime(args); break;
                 case "/setgoals": CmdSetGoals(args); break;
                 case "/setstate": CmdSetState(args); break;
@@ -2292,6 +2307,14 @@ public static class AdminPanel
     }
 
     // ── GAME STATE ──────────────────────────────────────────────
+
+    private static void CmdSay(string[] args)
+    {
+        if (args.Length < 1) { StatusWarn("Usage: /say <message>"); return; }
+        string msg = string.Join(" ", args);
+        SendServerCmd("/say " + msg);
+        StatusOk("Message sent: " + msg);
+    }
 
     private static void CmdSetTime(string[] args)
     {
