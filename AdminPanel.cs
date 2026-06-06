@@ -1332,7 +1332,6 @@ public static class AdminPanel
             CheckLocalPlayerAdmin();
             if (!localPlayerIsAdmin)
             {
-                Debug.Log("[AdminPanel] Panel open blocked — retrying after delay");
                 AdminPanelBehaviour.Instance?.StartCoroutine(DelayedAdminCheck());
                 return;
             }
@@ -1351,13 +1350,11 @@ public static class AdminPanel
             CheckLocalPlayerAdmin();
             if (localPlayerIsAdmin)
             {
-                Debug.Log("[AdminPanel] Admin authorized on retry");
                 Show();
                 yield break;
             }
         }
         StatusWarn("You are not in the admin list");
-        Debug.Log("[AdminPanel] Panel open blocked after retry — localPlayerIsAdmin=" + localPlayerIsAdmin);
     }
 
     public static void Show()
@@ -1556,11 +1553,9 @@ public static class AdminPanel
             var nm = Unity.Netcode.NetworkManager.Singleton;
             if (nm == null)
             {
-                Debug.Log("[AdminPanel] IsInServer: NetworkManager.Singleton is null");
                 return false;
             }
             bool result = nm.IsServer || nm.IsConnectedClient;
-            Debug.Log("[AdminPanel] IsInServer: " + result + " (IsServer=" + nm.IsServer + " IsConnectedClient=" + nm.IsConnectedClient + ")");
             return result;
         }
         catch (Exception ex)
@@ -1577,7 +1572,6 @@ public static class AdminPanel
         {
             if (!IsInServer())
             {
-                Debug.Log("[AdminPanel] Admin check: not in a server");
                 return;
             }
 
@@ -1595,20 +1589,13 @@ public static class AdminPanel
             if (nm != null && nm.IsServer && !nm.IsHost)
             {
                 localPlayerIsAdmin = true;
-                Debug.Log("[AdminPanel] Admin check: dedicated server operator — auto-authorized");
                 return;
             }
-
-            Debug.Log("[AdminPanel] Admin check: IsServer=" + (nm != null ? nm.IsServer.ToString() : "N/A")
-                + " IsHost=" + (nm != null ? nm.IsHost.ToString() : "N/A")
-                + " IsClient=" + (nm != null ? nm.IsClient.ToString() : "N/A")
-                + " IsConnectedClient=" + (nm != null ? nm.IsConnectedClient.ToString() : "N/A"));
 
             // Get local player's Steam ID
             string localSteamId = GetLocalPlayerSteamId();
             if (string.IsNullOrEmpty(localSteamId) || localSteamId == "N/A")
             {
-                Debug.Log("[AdminPanel] Admin check: could not get local player Steam ID");
                 return;
             }
 
@@ -1625,11 +1612,9 @@ public static class AdminPanel
                         if (p != null && p.IsLocalPlayer)
                         {
                             int adminLevel = p.AdminLevel.Value;
-                            Debug.Log("[AdminPanel] Admin check: AdminLevel=" + adminLevel + " SteamId=" + SafeNetString(p.SteamId));
                             if (adminLevel > 0)
                             {
                                 localPlayerIsAdmin = true;
-                                Debug.Log("[AdminPanel] Admin check: authorized via AdminLevel=" + adminLevel);
                                 return;
                             }
                             break;
@@ -1643,17 +1628,13 @@ public static class AdminPanel
             if (s_adminCheckResponse.HasValue)
             {
                 localPlayerIsAdmin = s_adminCheckResponse.Value;
-                Debug.Log("[AdminPanel] Admin check: named message result=" + localPlayerIsAdmin);
                 if (localPlayerIsAdmin) return;
             }
             else if (!s_adminCheckRequested)
             {
                 s_adminCheckRequested = true;
                 SendAdminCheckRequest(localSteamId);
-                Debug.Log("[AdminPanel] Admin check: sent named message request for SteamId=" + localSteamId);
             }
-
-            Debug.Log("[AdminPanel] Admin check: not authorized for SteamId=" + localSteamId + " (pending=" + s_adminCheckRequested + " response=" + s_adminCheckResponse + ")");
         }
         catch (Exception ex) { Debug.LogError("[AdminPanel] Admin check threw: " + ex.ToString()); localPlayerIsAdmin = false; }
     }
@@ -1671,7 +1652,6 @@ public static class AdminPanel
             if (!s_adminResultHandlerRegistered)
             {
                 s_adminResultHandlerRegistered = true;
-                Debug.Log("[AdminPanel] Client admin check handler registered");
             }
         }
         catch (Exception ex)
@@ -1706,7 +1686,6 @@ public static class AdminPanel
             if (nm.IsServer && nm.IsHost)
             {
                 s_adminCheckResponse = ServerCommandHandler.CheckAdminLocal(steamId);
-                Debug.Log("[AdminPanel] Admin check (local server): " + (s_adminCheckResponse.Value ? "authorized" : "denied"));
                 return;
             }
 
@@ -1734,7 +1713,6 @@ public static class AdminPanel
             reader.ReadBytesSafe(ref data, length);
             string result = Encoding.UTF8.GetString(data);
             s_adminCheckResponse = result == "1";
-            Debug.Log("[AdminPanel] Admin check result from server: " + (s_adminCheckResponse.Value ? "authorized" : "denied"));
 
             // Auto-open the panel when the async response arrives,
             // even if DelayedAdminCheck() has already timed out.
