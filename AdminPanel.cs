@@ -438,9 +438,9 @@ public static class ServerCommandHandler
         if (target?.PlayerBody?.Rigidbody == null) return;
         var rng = new System.Random();
         target.PlayerBody.Rigidbody.AddForce(new Vector3(
-            (float)(rng.NextDouble() * 2 - 1) * 80f,
-            (float)(rng.NextDouble()) * 40f + 15f,
-            (float)(rng.NextDouble() * 2 - 1) * 80f
+            (float)(rng.NextDouble() * 2 - 1) * 500f,
+            (float)(rng.NextDouble()) * 300f + 100f,
+            (float)(rng.NextDouble() * 2 - 1) * 500f
         ), UnityEngine.ForceMode.Impulse);
     }
 
@@ -449,7 +449,7 @@ public static class ServerCommandHandler
         if (args.Length < 1) return;
         var target = PlayerManager.Instance.GetPlayerByNeedle(args[0]);
         if (target?.PlayerBody?.Rigidbody != null)
-            target.PlayerBody.Rigidbody.AddForce(Vector3.up * 12f, UnityEngine.ForceMode.Impulse);
+            target.PlayerBody.Rigidbody.AddForce(Vector3.up * 600f, UnityEngine.ForceMode.Impulse);
     }
 
     private static void Mute(string[] args)
@@ -641,6 +641,12 @@ public static class AdminPanel
             RegisterAdminCheckClientHandler();
 
         if (panel == null) return;
+
+        if (panelVisible && !IsInServer())
+        {
+            Hide();
+            return;
+        }
 
         if (Keyboard.current != null && Keyboard.current.xKey.wasPressedThisFrame && !IsTyping())
             Toggle();
