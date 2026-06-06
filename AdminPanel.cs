@@ -1933,6 +1933,23 @@ public static class AdminPanel
     // ── COMMAND EXECUTOR ────────────────────────────────────────
 
     /// <summary>Sends a command to the server via a named network message (bypasses chat system entirely).</summary>
+    private static void SendChat(string message)
+    {
+        var cm = ChatManager.Instance;
+        if (cm == null) return;
+        cm.AddChatMessage(new ChatMessage
+        {
+            SteamID = null,
+            Username = null,
+            Team = null,
+            Content = message,
+            Timestamp = Utils.GetTimestamp(),
+            IsQuickChat = false,
+            IsTeamChat = false,
+            IsSystem = true
+        });
+    }
+
     private static void SendServerCmd(string command)
     {
         try
@@ -2103,9 +2120,13 @@ public static class AdminPanel
     {
         var players = PlayerManager.Instance.GetPlayers();
         var muted = players.Where(p => p.IsMuted.Value).ToList();
-        if (muted.Count == 0) { StatusOk("No muted players"); return; }
+        if (muted.Count == 0)
+        {
+            SendChat("No muted players");
+            return;
+        }
         string list = string.Join(", ", muted.Select(p => SafeNetString(p.Username)));
-        StatusOk("Muted: " + list);
+        SendChat("Muted: " + list);
     }
 
     // ── WHOAMI ──────────────────────────────────────────────────
@@ -2129,7 +2150,7 @@ public static class AdminPanel
         if (target == null) { StatusErr("No player found"); return; }
         var gs = target.GameState.Value;
         string info = $"User: {SafeNetString(target.Username)} | Steam: {SafeNetString(target.SteamId)} | Team: {gs.Team} | Role: {gs.Role} | AdminLvl: {target.AdminLevel.Value} | Muted: {target.IsMuted.Value}";
-        StatusOk(info);
+        SendChat(info);
     }
 
     // ── TEAM MANAGEMENT ─────────────────────────────────────────
